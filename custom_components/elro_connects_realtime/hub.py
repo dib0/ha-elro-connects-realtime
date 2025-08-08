@@ -90,12 +90,10 @@ class ElroConnectsHub:
             await self._async_send_data(f"IOT_KEY?{self._device_id}")
 
             # Start receive task
-            self._receive_task = asyncio.create_task(
-                self._async_receive_data())
+            self._receive_task = asyncio.create_task(self._async_receive_data())
 
             # Start heartbeat task
-            self._heartbeat_task = asyncio.create_task(
-                self._async_heartbeat())
+            self._heartbeat_task = asyncio.create_task(self._async_heartbeat())
 
             # Request initial device status
             await self.async_sync_device_status()
@@ -143,9 +141,7 @@ class ElroConnectsHub:
 
         try:
             await self._hass.async_add_executor_job(
-                self._socket.sendto, 
-                data.encode("utf-8"), 
-                (self._host, self._port)
+                self._socket.sendto, data.encode("utf-8"), (self._host, self._port)
             )
             _LOGGER.debug("Sent: %s", data)
         except Exception as ex:
@@ -198,8 +194,7 @@ class ElroConnectsHub:
         elif cmd_id == ElroCommands.DEVICE_NAME_REPLY:
             await self._async_handle_device_name_reply(data)
 
-    async def _async_handle_device_status_update(self, 
-                                                 data: dict[str, Any]) -> None:
+    async def _async_handle_device_status_update(self, data: dict[str, Any]) -> None:
         """Handle device status update."""
         if data.get("device_name") == "STATUES":
             return
@@ -224,8 +219,7 @@ class ElroConnectsHub:
             # Device state
             if len(device_status) >= 6:
                 status_code = (
-                    device_status[4:-2] if len(device_status) > 6 
-                                        else device_status[4:]
+                    device_status[4:-2] if len(device_status) > 6 else device_status[4:]
                 )
 
                 if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
@@ -245,8 +239,7 @@ class ElroConnectsHub:
         device.last_seen = datetime.now()
         await self._async_notify_device_update(device)
 
-    async def _async_handle_device_alarm_trigger(self, 
-                                                 data: dict[str, Any]) -> None:
+    async def _async_handle_device_alarm_trigger(self, data: dict[str, Any]) -> None:
         """Handle device alarm trigger."""
         answer_content = data.get("answer_content", "")
         if len(answer_content) >= 10:
@@ -257,16 +250,13 @@ class ElroConnectsHub:
                 device.last_seen = datetime.now()
 
                 _LOGGER.warning(
-                    "ALARM! Device ID %d (%s)", 
-                    device_id, 
-                    device.name or "Unknown"
+                    "ALARM! Device ID %d (%s)", device_id, device.name or "Unknown"
                 )
                 await self._async_notify_device_update(device)
             except ValueError:
                 pass
 
-    async def _async_handle_device_name_reply(self, 
-                                              data: dict[str, Any]) -> None:
+    async def _async_handle_device_name_reply(self, data: dict[str, Any]) -> None:
         """Handle device name reply."""
         answer_content = data.get("answer_content", "")
         if answer_content == "NAME_OVER" or len(answer_content) < 36:
@@ -340,16 +330,14 @@ class ElroConnectsHub:
     async def async_sync_devices(self) -> None:
         """Get all device status."""
         data = json.dumps(
-            {"cmdId": ElroCommands.GET_ALL_EQUIPMENT_STATUS, 
-             "device_status": ""}
+            {"cmdId": ElroCommands.GET_ALL_EQUIPMENT_STATUS, "device_status": ""}
         )
         msg = self._construct_message(data)
         await self._async_send_data(msg)
 
     async def async_get_device_names(self) -> None:
         """Get device names."""
-        data = json.dumps({"cmdId": ElroCommands.GET_DEVICE_NAME, 
-                           "device_ID": 0})
+        data = json.dumps({"cmdId": ElroCommands.GET_DEVICE_NAME, "device_ID": 0})
         msg = self._construct_message(data)
         await self._async_send_data(msg)
 
@@ -384,11 +372,10 @@ class ElroConnectsHub:
                     break
 
                 # Check if we received data recently
-                time_since_last_data = datetime.now()-self._last_data_received
+                time_since_last_data = datetime.now() - self._last_data_received
                 if time_since_last_data > timedelta(minutes=1):
                     _LOGGER.warning(
-                        "No data received for %s, reconnecting", 
-                        time_since_last_data
+                        "No data received for %s, reconnecting", time_since_last_data
                     )
                     # Restart connection
                     await self._async_send_data(f"IOT_KEY?{self._device_id}")

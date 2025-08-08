@@ -37,9 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create hub instance
     hub = ElroConnectsHub(
-        host=entry.data[CONF_HOST], 
-        device_id=entry.data[CONF_DEVICE_ID], 
-        hass=hass
+        host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
     )
 
     # Create coordinator for device updates
@@ -109,9 +107,7 @@ async def _async_register_services(hass: HomeAssistant) -> None:
     # Register services only if not already registered
     if not hass.services.has_service(DOMAIN, "test_alarm"):
         hass.services.async_register(
-            DOMAIN, "test_alarm", 
-            async_test_alarm, 
-            schema=SERVICE_TEST_ALARM_SCHEMA
+            DOMAIN, "test_alarm", async_test_alarm, schema=SERVICE_TEST_ALARM_SCHEMA
         )
 
     if not hass.services.has_service(DOMAIN, "sync_devices"):
@@ -138,9 +134,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hub.async_stop()
 
     # Unload platforms
-    unload_ok = await hass.config_entries.async_unload_platforms(
-        entry, 
-        PLATFORMS)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Clean up stored data
     if unload_ok:
