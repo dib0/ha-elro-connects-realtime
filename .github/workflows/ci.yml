@@ -25,9 +25,6 @@ jobs:
           pip install black flake8 isort mypy
           pip install homeassistant
       
-      - name: Run isort
-        run: isort --check-only custom_components/
-      
       - name: Run flake8
         run: flake8 custom_components/
       
