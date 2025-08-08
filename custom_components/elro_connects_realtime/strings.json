@@ -1,0 +1,41 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "ELRO Connects Real-time Hub Setup",
+        "description": "Configure your ELRO Connects hub connection for real-time events. You can find the Device ID by checking your ELRO Connects app or hub settings.",
+        "data": {
+          "host": "IP Address",
+          "device_id": "Device ID (e.g., ST_dc4f224febfd)",
+          "ctrl_key": "Control Key (optional)",
+          "app_id": "App ID (optional)"
+        },
+        "data_description": {
+          "host": "The IP address of your ELRO Connects hub on your local network",
+          "device_id": "The unique device identifier of your ELRO Connects hub, usually starts with 'ST_'",
+          "ctrl_key": "Control key for authentication (leave default unless specified)",
+          "app_id": "Application ID for authentication (leave default unless specified)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the ELRO Connects hub. Please verify the IP address and ensure the hub is powered on and connected to your network.",
+      "invalid_auth": "Invalid authentication credentials.",
+      "unknown": "Unexpected error occurred during setup."
+    },
+    "abort": {
+      "already_configured": "This ELRO Connects hub is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "ELRO Connects Real-time Options",
+        "description": "Configure advanced options for your ELRO Connects Real-time integration.",
+        "data": {
+          "scan_interval": "Update interval (seconds)"
+        }
+      }
+    }
+  }
+}

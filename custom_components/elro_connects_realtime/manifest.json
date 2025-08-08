@@ -1,0 +1,15 @@
+{
+  "domain": "elro_connects_realtime",
+  "name": "ELRO Connects Real-time",
+  "codeowners": ["@dib0"],
+  "config_flow": true,
+  "documentation": "https://github.com/dib0/ha-elro-connects-realtime",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/dib0/ha-elro-connects-realtime/issues",
+  "requirements": [],
+  "version": "1.0.0",
+  "dependencies": [],
+  "after_dependencies": [],
+  "homeassistant": "2025.7.0"
+}

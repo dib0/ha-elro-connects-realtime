@@ -1,0 +1,30 @@
+test_alarm:
+  name: Test Device Alarm
+  description: Test the alarm on a specific ELRO Connects device
+  target:
+    entity:
+      domain: binary_sensor
+      integration: elro_connects_realtime
+  fields:
+    device_id:
+      name: Device ID
+      description: The ID of the device to test (optional if entity is provided)
+      required: false
+      selector:
+        number:
+          min: 1
+          max: 65535
+
+sync_devices:
+  name: Sync All Devices
+  description: Force synchronization of all ELRO Connects devices
+  target:
+    device:
+      integration: elro_connects_realtime
+
+get_device_names:
+  name: Refresh Device Names
+  description: Request updated device names from the ELRO Connects hub
+  target:
+    device:
+      integration: elro_connects_realtime
