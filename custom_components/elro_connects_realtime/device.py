@@ -58,7 +58,8 @@ class ElroDevice:
             ElroDeviceTypes.DOOR_WINDOW_SENSOR: "Door/Window Sensor",
         }
 
-        return type_map.get(str(self.device_type), f"Unknown ({self.device_type})")
+        return type_map.get(str(self.device_type), 
+                            f"Unknown ({self.device_type})")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert device to dictionary."""
@@ -68,9 +69,13 @@ class ElroDevice:
             "device_type": self.device_type,
             "state": self.state,
             "battery_level": self.battery_level,
-            "last_seen": self.last_seen.isoformat() if self.last_seen else None,
+            "last_seen": self.last_seen.isoformat() if 
+            self.last_seen else 
+            None,
         }
 
     def __repr__(self) -> str:
         """Return string representation."""
-        return f"ElroDevice(id={self.id}, name={self.name}, type={self.device_type}, state={self.state})"
+        return f"ElroDevice(id={self.id},\
+            name={self.name},\
+             type={self.device_type}, state={self.state})"

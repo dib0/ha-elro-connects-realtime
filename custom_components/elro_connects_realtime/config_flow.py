@@ -28,26 +28,32 @@ _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_HOST): selector.TextSelector(
+        vol.Required(CONF_HOST): 
+        selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
         ),
-        vol.Required(CONF_DEVICE_ID): selector.TextSelector(
+        vol.Required(CONF_DEVICE_ID): 
+        selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
         ),
-        vol.Optional(CONF_CTRL_KEY, default=DEFAULT_CTRL_KEY): selector.TextSelector(
+        vol.Optional(CONF_CTRL_KEY, default=DEFAULT_CTRL_KEY): 
+        selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
         ),
-        vol.Optional(CONF_APP_ID, default=DEFAULT_APP_ID): selector.TextSelector(
+        vol.Optional(CONF_APP_ID, default=DEFAULT_APP_ID): 
+        selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
         ),
     }
 )
 
 
-async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
+async def validate_input(hass: HomeAssistant, 
+                         data: dict[str, Any]) -> dict[str, Any]:
     """Validate the user input allows us to connect.
 
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
+    Data has the keys from STEP_USER_DATA_SCHEMA with 
+    values provided by the user.
     """
     try:
         # Test UDP connection to the device
@@ -57,7 +63,9 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         # Try to send IOT_KEY query
         test_message = f"IOT_KEY?{data[CONF_DEVICE_ID]}"
         await hass.async_add_executor_job(
-            sock.sendto, test_message.encode("utf-8"), (data[CONF_HOST], DEFAULT_PORT)
+            sock.sendto, 
+            test_message.encode("utf-8"), 
+            (data[CONF_HOST], DEFAULT_PORT)
         )
 
         # Try to receive response (basic connectivity test)
@@ -103,7 +111,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
                 self._abort_if_unique_id_configured()
 
-                return self.async_create_entry(title=info["title"], data=user_input)
+                return self.async_create_entry(
+                    title=info["title"], 
+                    data=user_input)
 
         return self.async_show_form(
             step_id="user",
