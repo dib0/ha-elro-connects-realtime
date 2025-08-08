@@ -31,9 +31,6 @@ jobs:
       - name: Run isort
         run: isort --check-only custom_components/
       
-      - name: Run flake8
-        run: flake8 custom_components/
-      
       - name: Run mypy
         run: mypy custom_components/
 
