@@ -25,6 +25,12 @@ jobs:
           pip install black flake8 isort mypy
           pip install homeassistant
       
+      - name: Run black
+        run: black --check custom_components/
+      
+      - name: Run isort
+        run: isort --check-only custom_components/
+      
       - name: Run flake8
         run: flake8 custom_components/
       
@@ -55,3 +61,16 @@ jobs:
       - name: Validate strings
         run: |
           python -m json.tool custom_components/elro_connects_realtime/strings.json
+
+  # hacs:
+  #   runs-on: ubuntu-latest
+  #   name: HACS validation
+  #   steps:
+  #     - name: Check out code
+  #       uses: actions/checkout@v4
+      
+  #     - name: HACS validation
+  #       uses: hacs/action@main
+  #       with:
+  #         category: integration
+   

@@ -1,4 +1,5 @@
 """Sensor platform for ELRO Connects Real-time."""
+
 from __future__ import annotations
 
 import logging
@@ -33,26 +34,27 @@ async def async_setup_entry(
 ) -> None:
     """Set up ELRO Connects sensor platform."""
     hub: ElroConnectsHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
-    
+
     entities = []
-    
+
     # Create sensors for existing devices
     for device in hub.devices.values():
         entities.extend(_create_sensors_for_device(device, hub))
-    
+
     if entities:
         async_add_entities(entities, True)
-    
+
     # Set up callback for new devices
     @callback
     def _async_device_updated(device: ElroDevice) -> None:
         """Handle device updates."""
         # Check if we need to create new entities for this device
         existing_entities = [
-            entity for entity in hass.data.get(f"{DOMAIN}_sensor_entities", [])
+            entity
+            for entity in hass.data.get(f"{DOMAIN}_sensor_entities", [])
             if getattr(entity, "_device_id", None) == device.id
         ]
-        
+
         if not existing_entities:
             new_entities = _create_sensors_for_device(device, hub)
             if new_entities:
@@ -61,7 +63,7 @@ async def async_setup_entry(
                 if f"{DOMAIN}_sensor_entities" not in hass.data:
                     hass.data[f"{DOMAIN}_sensor_entities"] = []
                 hass.data[f"{DOMAIN}_sensor_entities"].extend(new_entities)
-    
+
     hub.add_device_update_callback(_async_device_updated)
 
 
@@ -70,11 +72,11 @@ def _create_sensors_for_device(
 ) -> list[ElroConnectsSensor]:
     """Create sensors for a device."""
     entities = []
-    
+
     # All devices get a battery sensor
     if device.battery_level >= 0:
         entities.append(ElroConnectsBatterySensor(device, hub))
-    
+
     return entities
 
 
@@ -117,10 +119,10 @@ class ElroConnectsSensor(SensorEntity):
             ATTR_DEVICE_ID: self._device.id,
             ATTR_DEVICE_TYPE: self._device.device_type,
         }
-        
+
         if self._device.last_seen:
             attrs[ATTR_LAST_SEEN] = self._device.last_seen.isoformat()
-            
+
         return attrs
 
     async def async_added_to_hass(self) -> None:

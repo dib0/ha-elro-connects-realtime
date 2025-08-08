@@ -1,7 +1,7 @@
 """The ELRO Connects Real-time integration."""
+
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import timedelta
 
@@ -10,7 +10,8 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.update_coordinator import UpdateFailed
 import homeassistant.helpers.config_validation as cv
 
 from .const import CONF_DEVICE_ID, CONF_HOST, DOMAIN
@@ -37,9 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create hub instance
     hub = ElroConnectsHub(
-        host=entry.data[CONF_HOST],
-        device_id=entry.data[CONF_DEVICE_ID],
-        hass=hass
+        host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
     )
 
     # Create coordinator for device updates
@@ -68,11 +67,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def _async_register_services(hass: HomeAssistant) -> None:
     """Register services for ELRO Connects."""
-    
+
     async def async_test_alarm(call: ServiceCall) -> None:
         """Handle test alarm service call."""
         device_id = call.data.get("device_id")
-        
+
         # If device_id not provided, try to get it from entity_id
         if not device_id and "entity_id" in call.data:
             entity_id = call.data["entity_id"]
@@ -80,46 +79,52 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             state = hass.states.get(entity_id)
             if state and "device_id" in state.attributes:
                 device_id = state.attributes["device_id"]
-        
+
         if not device_id:
             _LOGGER.error("No device_id provided for test_alarm service")
             return
-        
+
         # Find the hub that contains this device
         for entry_data in hass.data[DOMAIN].values():
             hub = entry_data["hub"]
             if device_id in hub.devices:
                 await hub.async_test_device_alarm(device_id)
                 return
-        
+
         _LOGGER.error("Device %s not found in any hub", device_id)
-    
+
     async def async_sync_devices(call: ServiceCall) -> None:
         """Handle sync devices service call."""
         for entry_data in hass.data[DOMAIN].values():
             hub = entry_data["hub"]
             await hub.async_sync_devices()
-    
+
     async def async_get_device_names(call: ServiceCall) -> None:
         """Handle get device names service call."""
         for entry_data in hass.data[DOMAIN].values():
             hub = entry_data["hub"]
             await hub.async_get_device_names()
-    
+
     # Register services only if not already registered
     if not hass.services.has_service(DOMAIN, "test_alarm"):
         hass.services.async_register(
             DOMAIN, "test_alarm", async_test_alarm, schema=SERVICE_TEST_ALARM_SCHEMA
         )
-    
+
     if not hass.services.has_service(DOMAIN, "sync_devices"):
         hass.services.async_register(
-            DOMAIN, "sync_devices", async_sync_devices, schema=SERVICE_SYNC_DEVICES_SCHEMA
+            DOMAIN,
+            "sync_devices",
+            async_sync_devices,
+            schema=SERVICE_SYNC_DEVICES_SCHEMA,
         )
-    
+
     if not hass.services.has_service(DOMAIN, "get_device_names"):
         hass.services.async_register(
-            DOMAIN, "get_device_names", async_get_device_names, schema=SERVICE_GET_DEVICE_NAMES_SCHEMA
+            DOMAIN,
+            "get_device_names",
+            async_get_device_names,
+            schema=SERVICE_GET_DEVICE_NAMES_SCHEMA,
         )
 
 

@@ -1,4 +1,5 @@
 """ELRO Connects Hub communication."""
+
 from __future__ import annotations
 
 import asyncio
@@ -57,7 +58,7 @@ class ElroConnectsHub:
         self._ctrl_key = ctrl_key
         self._app_id = app_id
         self._hass = hass
-        
+
         self._socket: socket.socket | None = None
         self._msg_id = 0
         self._devices: dict[int, ElroDevice] = {}
@@ -65,7 +66,7 @@ class ElroConnectsHub:
         self._receive_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._last_data_received = datetime.now()
-        
+
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
 
     @property
@@ -92,27 +93,27 @@ class ElroConnectsHub:
             return
 
         self._running = True
-        
+
         # Create UDP socket
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setblocking(False)
-        
+
         try:
             # Start connection
-            await self._async_send_data(f'IOT_KEY?{self._device_id}')
-            
+            await self._async_send_data(f"IOT_KEY?{self._device_id}")
+
             # Start receive task
             self._receive_task = asyncio.create_task(self._async_receive_data())
-            
+
             # Start heartbeat task
             self._heartbeat_task = asyncio.create_task(self._async_heartbeat())
-            
+
             # Request initial device status
             await self.async_sync_device_status()
             await self.async_get_device_names()
-            
+
             _LOGGER.info("ELRO Connects hub started successfully")
-            
+
         except Exception as ex:
             _LOGGER.error("Failed to start ELRO Connects hub: %s", ex)
             await self.async_stop()
@@ -121,7 +122,7 @@ class ElroConnectsHub:
     async def async_stop(self) -> None:
         """Stop the hub connection."""
         self._running = False
-        
+
         # Cancel tasks
         if self._receive_task:
             self._receive_task.cancel()
@@ -130,7 +131,7 @@ class ElroConnectsHub:
             except asyncio.CancelledError:
                 pass
             self._receive_task = None
-            
+
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
             try:
@@ -138,7 +139,7 @@ class ElroConnectsHub:
             except asyncio.CancelledError:
                 pass
             self._heartbeat_task = None
-        
+
         # Close socket
         if self._socket:
             self._socket.close()
@@ -150,12 +151,10 @@ class ElroConnectsHub:
         """Send data to the hub."""
         if not self._socket:
             raise RuntimeError("Socket not initialized")
-        
+
         try:
             await self._hass.async_add_executor_job(
-                self._socket.sendto,
-                data.encode('utf-8'),
-                (self._host, self._port)
+                self._socket.sendto, data.encode("utf-8"), (self._host, self._port)
             )
             _LOGGER.debug("Sent: %s", data)
         except Exception as ex:
@@ -169,21 +168,21 @@ class ElroConnectsHub:
                 data, _ = await self._hass.async_add_executor_job(
                     self._socket.recvfrom, 4096
                 )
-                
-                reply = data.decode('utf-8').strip()
+
+                reply = data.decode("utf-8").strip()
                 _LOGGER.debug("Received: %s", reply)
-                
+
                 self._last_data_received = datetime.now()
-                
-                if reply.startswith('{') and reply != "{ST_answer_OK}":
+
+                if reply.startswith("{") and reply != "{ST_answer_OK}":
                     try:
                         msg = json.loads(reply)
                         await self._async_handle_message(msg)
                         # Send acknowledgment
-                        await self._async_send_data('APP_answer_OK')
+                        await self._async_send_data("APP_answer_OK")
                     except json.JSONDecodeError as ex:
                         _LOGGER.error("Failed to parse JSON message: %s", ex)
-                
+
             except socket.error as ex:
                 if self._running:
                     _LOGGER.error("Socket error: %s", ex)
@@ -219,7 +218,7 @@ class ElroConnectsHub:
 
         device = self._get_or_create_device(device_id)
         device.device_type = data.get("device_name")
-        
+
         # Parse device status
         device_status = data.get("device_status", "")
         if len(device_status) >= 4:
@@ -232,10 +231,16 @@ class ElroConnectsHub:
 
             # Device state
             if len(device_status) >= 6:
-                status_code = device_status[4:-2] if len(device_status) > 6 else device_status[4:]
-                
+                status_code = (
+                    device_status[4:-2] if len(device_status) > 6 else device_status[4:]
+                )
+
                 if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-                    device.state = DEVICE_STATE_CLOSED if status_code == "AA" else DEVICE_STATE_OPEN
+                    device.state = (
+                        DEVICE_STATE_CLOSED
+                        if status_code == "AA"
+                        else DEVICE_STATE_OPEN
+                    )
                 else:
                     if status_code == "BB":
                         device.state = DEVICE_STATE_ALARM
@@ -256,8 +261,10 @@ class ElroConnectsHub:
                 device = self._get_or_create_device(device_id)
                 device.state = DEVICE_STATE_ALARM
                 device.last_seen = datetime.now()
-                
-                _LOGGER.warning("ALARM! Device ID %d (%s)", device_id, device.name or "Unknown")
+
+                _LOGGER.warning(
+                    "ALARM! Device ID %d (%s)", device_id, device.name or "Unknown"
+                )
                 await self._async_notify_device_update(device)
             except ValueError:
                 pass
@@ -271,7 +278,7 @@ class ElroConnectsHub:
         try:
             device_id = int(answer_content[0:4], 16)
             name_hex = answer_content[4:36]  # 32 hex chars
-            
+
             # Convert hex to ASCII name
             name = self._hex_to_string(name_hex)
             if name:
@@ -287,7 +294,7 @@ class ElroConnectsHub:
         try:
             if len(hex_input) != 32:
                 return ""
-            
+
             byte_data = bytes.fromhex(hex_input)
             name = "".join(chr(b) for b in byte_data if b != 0)
             name = name.replace("@", "").replace("$", "")
@@ -312,41 +319,38 @@ class ElroConnectsHub:
     def _construct_message(self, data: str) -> str:
         """Construct message with proper format."""
         self._msg_id += 1
-        return json.dumps({
-            "msgId": self._msg_id,
-            "action": "appSend",
-            "params": {
-                "devTid": self._device_id,
-                "ctrlKey": self._ctrl_key,
-                "appTid": self._app_id,
-                "data": json.loads(data)
+        return json.dumps(
+            {
+                "msgId": self._msg_id,
+                "action": "appSend",
+                "params": {
+                    "devTid": self._device_id,
+                    "ctrlKey": self._ctrl_key,
+                    "appTid": self._app_id,
+                    "data": json.loads(data),
+                },
             }
-        })
+        )
 
     async def async_sync_device_status(self) -> None:
         """Sync device status."""
-        data = json.dumps({
-            "cmdId": ElroCommands.SYN_DEVICE_STATUS,
-            "device_status": ""
-        })
+        data = json.dumps(
+            {"cmdId": ElroCommands.SYN_DEVICE_STATUS, "device_status": ""}
+        )
         msg = self._construct_message(data)
         await self._async_send_data(msg)
 
     async def async_sync_devices(self) -> None:
         """Get all device status."""
-        data = json.dumps({
-            "cmdId": ElroCommands.GET_ALL_EQUIPMENT_STATUS,
-            "device_status": ""
-        })
+        data = json.dumps(
+            {"cmdId": ElroCommands.GET_ALL_EQUIPMENT_STATUS, "device_status": ""}
+        )
         msg = self._construct_message(data)
         await self._async_send_data(msg)
 
     async def async_get_device_names(self) -> None:
         """Get device names."""
-        data = json.dumps({
-            "cmdId": ElroCommands.GET_DEVICE_NAME,
-            "device_ID": 0
-        })
+        data = json.dumps({"cmdId": ElroCommands.GET_DEVICE_NAME, "device_ID": 0})
         msg = self._construct_message(data)
         await self._async_send_data(msg)
 
@@ -360,11 +364,13 @@ class ElroConnectsHub:
         if device.device_type == ElroDeviceTypes.FIRE_ALARM:
             payload = "17000000"
 
-        data = json.dumps({
-            "cmdId": ElroCommands.EQUIPMENT_CONTROL,
-            "device_ID": device_id,
-            "device_status": payload
-        })
+        data = json.dumps(
+            {
+                "cmdId": ElroCommands.EQUIPMENT_CONTROL,
+                "device_ID": device_id,
+                "device_status": payload,
+            }
+        )
         msg = self._construct_message(data)
         await self._async_send_data(msg)
 
@@ -374,21 +380,23 @@ class ElroConnectsHub:
             try:
                 # Wait for 30 seconds
                 await asyncio.sleep(30)
-                
+
                 if not self._running:
                     break
 
                 # Check if we received data recently
                 time_since_last_data = datetime.now() - self._last_data_received
                 if time_since_last_data > timedelta(minutes=1):
-                    _LOGGER.warning("No data received for %s, reconnecting", time_since_last_data)
+                    _LOGGER.warning(
+                        "No data received for %s, reconnecting", time_since_last_data
+                    )
                     # Restart connection
-                    await self._async_send_data(f'IOT_KEY?{self._device_id}')
+                    await self._async_send_data(f"IOT_KEY?{self._device_id}")
                     await self.async_sync_device_status()
 
                 # Sync devices periodically
                 await self.async_sync_devices()
-                
+
             except asyncio.CancelledError:
                 break
             except Exception as ex:

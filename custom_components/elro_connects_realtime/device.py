@@ -1,10 +1,12 @@
 """ELRO Connects Device representation."""
+
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
 from .const import DEVICE_STATE_UNKNOWN
+
 
 class ElroDevice:
     """Representation of an ELRO Connects device."""
@@ -28,7 +30,7 @@ class ElroDevice:
         """Return True if device is available."""
         if self.last_seen is None:
             return False
-        
+
         # Consider device unavailable if not seen for more than 5 minutes
         time_diff = datetime.now() - self.last_seen
         return time_diff.total_seconds() < 300
@@ -47,15 +49,15 @@ class ElroDevice:
     def _get_model_name(self) -> str:
         """Get human-readable model name from device type."""
         from .const import ElroDeviceTypes
-        
+
         type_map = {
             ElroDeviceTypes.CO_ALARM: "CO Alarm",
-            ElroDeviceTypes.WATER_ALARM: "Water Alarm", 
+            ElroDeviceTypes.WATER_ALARM: "Water Alarm",
             ElroDeviceTypes.HEAT_ALARM: "Heat Alarm",
             ElroDeviceTypes.FIRE_ALARM: "Fire Alarm",
             ElroDeviceTypes.DOOR_WINDOW_SENSOR: "Door/Window Sensor",
         }
-        
+
         return type_map.get(self.device_type, f"Unknown ({self.device_type})")
 
     def to_dict(self) -> dict[str, Any]:

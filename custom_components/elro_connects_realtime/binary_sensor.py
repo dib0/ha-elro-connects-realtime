@@ -1,4 +1,5 @@
 """Binary sensor platform for ELRO Connects Real-time."""
+
 from __future__ import annotations
 
 import logging
@@ -35,26 +36,27 @@ async def async_setup_entry(
 ) -> None:
     """Set up ELRO Connects binary sensor platform."""
     hub: ElroConnectsHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
-    
+
     entities = []
-    
+
     # Create binary sensors for existing devices
     for device in hub.devices.values():
         entities.extend(_create_binary_sensors_for_device(device, hub))
-    
+
     if entities:
         async_add_entities(entities, True)
-    
+
     # Set up callback for new devices
     @callback
     def _async_device_updated(device: ElroDevice) -> None:
         """Handle device updates."""
         # Check if we need to create new entities for this device
         existing_entities = [
-            entity for entity in hass.data.get(f"{DOMAIN}_entities", [])
+            entity
+            for entity in hass.data.get(f"{DOMAIN}_entities", [])
             if getattr(entity, "_device_id", None) == device.id
         ]
-        
+
         if not existing_entities:
             new_entities = _create_binary_sensors_for_device(device, hub)
             if new_entities:
@@ -63,7 +65,7 @@ async def async_setup_entry(
                 if f"{DOMAIN}_entities" not in hass.data:
                     hass.data[f"{DOMAIN}_entities"] = []
                 hass.data[f"{DOMAIN}_entities"].extend(new_entities)
-    
+
     hub.add_device_update_callback(_async_device_updated)
 
 
@@ -72,21 +74,17 @@ def _create_binary_sensors_for_device(
 ) -> list[ElroConnectsBinarySensor]:
     """Create binary sensors for a device based on its type."""
     entities = []
-    
+
     if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-        entities.append(
-            ElroConnectsDoorWindowSensor(device, hub)
-        )
+        entities.append(ElroConnectsDoorWindowSensor(device, hub))
     elif device.device_type in [
         ElroDeviceTypes.CO_ALARM,
         ElroDeviceTypes.WATER_ALARM,
         ElroDeviceTypes.HEAT_ALARM,
         ElroDeviceTypes.FIRE_ALARM,
     ]:
-        entities.append(
-            ElroConnectsAlarmSensor(device, hub)
-        )
-    
+        entities.append(ElroConnectsAlarmSensor(device, hub))
+
     return entities
 
 
@@ -129,13 +127,13 @@ class ElroConnectsBinarySensor(BinarySensorEntity):
             ATTR_DEVICE_ID: self._device.id,
             ATTR_DEVICE_TYPE: self._device.device_type,
         }
-        
+
         if self._device.battery_level >= 0:
             attrs[ATTR_BATTERY_LEVEL] = self._device.battery_level
-            
+
         if self._device.last_seen:
             attrs[ATTR_LAST_SEEN] = self._device.last_seen.isoformat()
-            
+
         return attrs
 
     async def async_added_to_hass(self) -> None:

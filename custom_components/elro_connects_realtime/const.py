@@ -13,10 +13,11 @@ DEFAULT_PORT = 1025
 DEFAULT_CTRL_KEY = "0"
 DEFAULT_APP_ID = "0"
 
+
 # ELRO Connects command constants (from original code)
 class ElroCommands:
     """ELRO Connects command constants."""
-    
+
     # Send commands
     SWITCH_TIMER = -34
     DELETE_EQUIPMENT_DETAIL = -4
@@ -56,7 +57,7 @@ class ElroCommands:
 
 class ElroDeviceTypes:
     """ELRO device type constants."""
-    
+
     CO_ALARM = "0000"
     WATER_ALARM = "0004"
     HEAT_ALARM = "0003"

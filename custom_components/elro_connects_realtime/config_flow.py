@@ -1,7 +1,7 @@
 """Config flow for ELRO Connects Real-time integration."""
+
 from __future__ import annotations
 
-import asyncio
 import logging
 import socket
 from typing import Any
@@ -54,15 +54,13 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
         # Test UDP connection to the device
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.settimeout(5.0)
-        
+
         # Try to send IOT_KEY query
-        test_message = f'IOT_KEY?{data[CONF_DEVICE_ID]}'
+        test_message = f"IOT_KEY?{data[CONF_DEVICE_ID]}"
         await hass.async_add_executor_job(
-            sock.sendto, 
-            test_message.encode('utf-8'), 
-            (data[CONF_HOST], DEFAULT_PORT)
+            sock.sendto, test_message.encode("utf-8"), (data[CONF_HOST], DEFAULT_PORT)
         )
-        
+
         # Try to receive response (basic connectivity test)
         try:
             await hass.async_add_executor_job(sock.recv, 1024)
@@ -71,7 +69,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
             pass
         finally:
             sock.close()
-            
+
     except Exception as ex:
         _LOGGER.error("Error connecting to ELRO Connects hub: %s", ex)
         raise CannotConnect from ex
@@ -90,7 +88,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     ) -> FlowResult:
         """Handle the initial step."""
         errors: dict[str, str] = {}
-        
+
         if user_input is not None:
             try:
                 info = await validate_input(self.hass, user_input)
@@ -105,7 +103,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Check if already configured
                 await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
                 self._abort_if_unique_id_configured()
-                
+
                 return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(
@@ -114,8 +112,8 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             errors=errors,
             description_placeholders={
                 "device_id_example": "ST_dc4f224febfd",
-                "host_example": "192.168.1.100"
-            }
+                "host_example": "192.168.1.100",
+            },
         )
 
 
