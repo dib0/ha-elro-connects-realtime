@@ -58,4 +58,3 @@ jobs:
       - name: Validate strings
         run: |
           python -m json.tool custom_components/elro_connects_realtime/strings.json
-`
