@@ -16,10 +16,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    DOMAIN,
     ATTR_DEVICE_ID,
     ATTR_DEVICE_TYPE,
     ATTR_LAST_SEEN,
+    DOMAIN,
 )
 from .device import ElroDevice
 from .hub import ElroConnectsHub

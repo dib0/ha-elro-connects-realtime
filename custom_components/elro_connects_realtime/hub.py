@@ -9,30 +9,17 @@ import socket
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.core import HomeAssistant
 
 from .const import (
     DEFAULT_PORT,
+    DEVICE_STATE_ALARM,
+    DEVICE_STATE_CLOSED,
+    DEVICE_STATE_NORMAL,
+    DEVICE_STATE_OPEN,
+    DEVICE_STATE_UNKNOWN,
     ElroCommands,
     ElroDeviceTypes,
-    DEVICE_STATE_UNKNOWN,
-    DEVICE_STATE_NORMAL,
-    DEVICE_STATE_ALARM,
-    DEVICE_STATE_OPEN,
-    DEVICE_STATE_CLOSED,
-)
-from .device import ElroDevice
-
-from .const import (
-    DEFAULT_PORT,
-    ElroCommands,
-    ElroDeviceTypes,
-    DEVICE_STATE_UNKNOWN,
-    DEVICE_STATE_NORMAL,
-    DEVICE_STATE_ALARM,
-    DEVICE_STATE_OPEN,
-    DEVICE_STATE_CLOSED,
 )
 from .device import ElroDevice
 
