@@ -170,20 +170,6 @@ class ElroConnectsHub:
 
         _LOGGER.info("ELRO Connects hub stopped")
 
-    async def _async_send_data(self, data: str) -> None:
-        """Send data to the hub."""
-        if not self._socket:
-            raise RuntimeError("Socket not initialized")
-
-        try:
-            await self._hass.async_add_executor_job(
-                self._socket.sendto, data.encode("utf-8"), (self._host, self._port)
-            )
-            _LOGGER.debug("Sent: %s", data)
-        except Exception as ex:
-            _LOGGER.error("Error sending data: %s", ex)
-            raise
-
     async def _async_receive_data(self) -> None:
         """Receive data from the hub."""
         while self._running:
