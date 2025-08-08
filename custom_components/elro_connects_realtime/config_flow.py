@@ -6,7 +6,7 @@ import logging
 import socket
 from typing import Any
 
-import voluptuous as vol
+import voluptuous as vol  # type: ignore[import-untyped]
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
@@ -78,7 +78,7 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
     return {"title": f"ELRO Connects Real-time Hub ({data[CONF_HOST]})"}
 
 
-class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
     """Handle a config flow for ELRO Connects Real-time."""
 
     VERSION = 1

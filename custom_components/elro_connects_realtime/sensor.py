@@ -12,7 +12,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import ATTR_DEVICE_ID, ATTR_DEVICE_TYPE, ATTR_LAST_SEEN, DOMAIN
@@ -40,7 +40,6 @@ async def async_setup_entry(
         async_add_entities(entities, True)
 
     # Set up callback for new devices
-    @callback
     def _async_device_updated(device: ElroDevice) -> None:
         """Handle device updates."""
         # Check if we need to create new entities for this device
@@ -128,7 +127,6 @@ class ElroConnectsSensor(SensorEntity):
         """When entity is removed from hass."""
         self._hub.remove_device_update_callback(self._async_device_updated)
 
-    @callback
     def _async_device_updated(self, device: ElroDevice) -> None:
         """Handle device updates."""
         if device.id == self._device.id:

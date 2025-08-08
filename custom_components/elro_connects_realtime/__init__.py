@@ -6,13 +6,14 @@ import logging
 from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
-import voluptuous as vol
+import voluptuous as vol  # type: ignore[import-untyped]
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CONF_DEVICE_ID, CONF_HOST, DOMAIN
+from .device import ElroDevice
 from .hub import ElroConnectsHub
 
 _LOGGER = logging.getLogger(__name__)
@@ -148,7 +149,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
-class ElroConnectsCoordinator(DataUpdateCoordinator):
+class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):
     """Class to manage fetching data from ELRO Connects hub."""
 
     def __init__(self, hass: HomeAssistant, hub: ElroConnectsHub) -> None:
@@ -161,7 +162,7 @@ class ElroConnectsCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=30),
         )
 
-    async def _async_update_data(self):
+    async def _async_update_data(self) -> dict[int, ElroDevice]:
         """Update data via library."""
         try:
             # Request device status update

@@ -50,8 +50,8 @@ class ElroConnectsHub:
         self._msg_id = 0
         self._devices: dict[int, ElroDevice] = {}
         self._running = False
-        self._receive_task: asyncio.Task | None = None
-        self._heartbeat_task: asyncio.Task | None = None
+        self._receive_task: asyncio.Task[None] | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._last_data_received = datetime.now()
 
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
@@ -152,6 +152,10 @@ class ElroConnectsHub:
         """Receive data from the hub."""
         while self._running:
             try:
+                if not self._socket:
+                    _LOGGER.error("Socket is None during receive")
+                    break
+
                 data, _ = await self._hass.async_add_executor_job(
                     self._socket.recvfrom, 4096
                 )

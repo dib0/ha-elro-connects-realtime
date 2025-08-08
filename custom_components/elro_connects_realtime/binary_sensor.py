@@ -10,7 +10,7 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
@@ -47,7 +47,6 @@ async def async_setup_entry(
         async_add_entities(entities, True)
 
     # Set up callback for new devices
-    @callback
     def _async_device_updated(device: ElroDevice) -> None:
         """Handle device updates."""
         # Check if we need to create new entities for this device
@@ -144,7 +143,6 @@ class ElroConnectsBinarySensor(BinarySensorEntity):
         """When entity is removed from hass."""
         self._hub.remove_device_update_callback(self._async_device_updated)
 
-    @callback
     def _async_device_updated(self, device: ElroDevice) -> None:
         """Handle device updates."""
         if device.id == self._device.id:
@@ -192,7 +190,9 @@ class ElroConnectsAlarmSensor(ElroConnectsBinarySensor):
             ElroDeviceTypes.HEAT_ALARM: "Heat Alarm",
             ElroDeviceTypes.FIRE_ALARM: "Fire Alarm",
         }
-        return device_type_map.get(self._device.device_type, "Alarm")
+        # Handle None device_type safely
+        device_type = self._device.device_type or ""
+        return device_type_map.get(device_type, "Alarm")
 
     @property
     def is_on(self) -> bool:
