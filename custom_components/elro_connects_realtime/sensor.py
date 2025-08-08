@@ -15,12 +15,7 @@ from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import (
-    ATTR_DEVICE_ID,
-    ATTR_DEVICE_TYPE,
-    ATTR_LAST_SEEN,
-    DOMAIN,
-)
+from .const import ATTR_DEVICE_ID, ATTR_DEVICE_TYPE, ATTR_LAST_SEEN, DOMAIN
 from .device import ElroDevice
 from .hub import ElroConnectsHub
 
