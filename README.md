@@ -38,8 +38,8 @@ A custom Home Assistant integration for ELRO Connects security devices with **re
 6. Go to Configuration → Integrations
 7. Click "+" and search for "ELRO Connects Real-time"
 8. Follow the configuration steps
-
--->### Manual Installation
+-->
+### Manual Installation
 
 1. Download the latest release from the [releases page][releases]
 2. Extract the archive
