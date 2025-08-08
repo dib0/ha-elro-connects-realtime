@@ -5,28 +5,16 @@
 [![License][license-shield]](LICENSE)
 [![hacs][hacsbadge]][hacs]
 
-A custom Home Assistant integration for ELRO Connects security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub, replacing the need for MQTT bridges and offering instant alarm notifications and device state changes.
+A custom Home Assistant integration for ELRO Connects security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub, offering instant alarm notifications and device state changes.
 
 ## ✨ Key Features
 
 - **🚀 Real-time Events**: Maintains persistent connection for instant alarm notifications
-- **🔗 Direct Communication**: Communicates directly with the ELRO Connects hub via UDP
-- **⚡ Zero Latency**: No MQTT broker dependency - direct device communication
+- **🔗 Direct Communication**: Communicates directly with the ELRO Connects hub via UDP, allowing events to be processed directly.
 - **🔋 Battery Monitoring**: Track battery levels of wireless devices
 - **🏠 Multiple Device Types**: Supports various ELRO Connects devices
 - **🛠️ Service Calls**: Test alarms and sync devices via Home Assistant services
 - **🔄 Auto Discovery**: Automatic device discovery and naming
-
-## 🆚 Differences from Standard ELRO Connects Integration
-
-| Feature | Standard Integration | **ELRO Connects Real-time** |
-|---------|---------------------|----------------------------|
-| Communication | MQTT Bridge Required | ✅ Direct UDP Communication |
-| Event Latency | 1-5 seconds | ✅ Instant (<100ms) |
-| Connection Type | Periodic Polling | ✅ Persistent Connection |
-| Dependencies | MQTT Broker | ✅ None |
-| Alarm Events | Delayed | ✅ Real-time |
-| Setup Complexity | Complex (MQTT setup) | ✅ Simple (IP + Device ID) |
 
 ## Supported Devices
 
@@ -40,7 +28,7 @@ A custom Home Assistant integration for ELRO Connects security devices with **re
 
 ## Installation
 
-### HACS (Recommended)
+<!--### HACS (Recommended)
 
 1. Make sure [HACS](https://hacs.xyz/) is installed
 2. In the HACS panel, go to "Integrations"
@@ -51,7 +39,7 @@ A custom Home Assistant integration for ELRO Connects security devices with **re
 7. Click "+" and search for "ELRO Connects Real-time"
 8. Follow the configuration steps
 
-### Manual Installation
+-->### Manual Installation
 
 1. Download the latest release from the [releases page][releases]
 2. Extract the archive
@@ -93,7 +81,7 @@ Before setting up the integration, you need:
 3. Search for **"ELRO Connects Real-time"**
 4. Enter your hub information:
    - **IP Address**: Your hub's local IP address
-   - **Device ID**: Your hub's device identifier (e.g., `ST_dc4f224febfd`)
+   - **Device ID**: Your hub's device identifier (e.g., `ST_ab4f224febfd`)
    - **Control Key**: Leave as default (`0`) unless specified otherwise
    - **App ID**: Leave as default (`0`) unless specified otherwise
 5. Click **Submit**
