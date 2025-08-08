@@ -369,12 +369,6 @@ class ElroConnectsHub:
         """Heartbeat to maintain connection."""
         while self._running:
             try:
-                # Wait for 30 seconds
-                await asyncio.sleep(30)
-
-                if not self._running:
-                    break
-
                 # Check if we received data recently
                 time_since_last_data = datetime.now() - self._last_data_received
                 if time_since_last_data > timedelta(minutes=1):
@@ -387,6 +381,9 @@ class ElroConnectsHub:
 
                 # Sync devices periodically
                 await self.async_sync_devices()
+
+                # Wait for 30 seconds
+                await asyncio.sleep(30)
 
             except asyncio.CancelledError:
                 break
