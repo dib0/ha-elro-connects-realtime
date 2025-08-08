@@ -58,8 +58,7 @@ class ElroDevice:
             ElroDeviceTypes.DOOR_WINDOW_SENSOR: "Door/Window Sensor",
         }
 
-        return type_map.get(str(self.device_type), 
-                            f"Unknown ({self.device_type})")
+        return type_map.get(str(self.device_type), f"Unknown ({self.device_type})")
 
     def to_dict(self) -> dict[str, Any]:
         """Convert device to dictionary."""
