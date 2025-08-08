@@ -23,6 +23,18 @@ from .const import (
 )
 from .device import ElroDevice
 
+from .const import (
+    DEFAULT_PORT,
+    ElroCommands,
+    ElroDeviceTypes,
+    DEVICE_STATE_UNKNOWN,
+    DEVICE_STATE_NORMAL,
+    DEVICE_STATE_ALARM,
+    DEVICE_STATE_OPEN,
+    DEVICE_STATE_CLOSED,
+)
+from .device import ElroDevice
+
 _LOGGER = logging.getLogger(__name__)
 
 

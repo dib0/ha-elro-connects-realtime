@@ -1,11 +1,12 @@
 """Config flow for ELRO Connects Real-time integration."""
 from __future__ import annotations
 
-import logging
-from typing import Any
-import voluptuous as vol
-import socket
 import asyncio
+import logging
+import socket
+from typing import Any
+
+import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -14,14 +15,14 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import selector
 
 from .const import (
-    DOMAIN,
-    CONF_HOST,
-    CONF_DEVICE_ID,
-    CONF_CTRL_KEY,
     CONF_APP_ID,
-    DEFAULT_CTRL_KEY,
+    CONF_CTRL_KEY,
+    CONF_DEVICE_ID,
+    CONF_HOST,
     DEFAULT_APP_ID,
+    DEFAULT_CTRL_KEY,
     DEFAULT_PORT,
+    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)

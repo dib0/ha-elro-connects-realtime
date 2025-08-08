@@ -1,9 +1,10 @@
 """The ELRO Connects Real-time integration."""
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 from datetime import timedelta
+
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
@@ -12,7 +13,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, CONF_HOST, CONF_DEVICE_ID
+from .const import CONF_DEVICE_ID, CONF_HOST, DOMAIN
 from .hub import ElroConnectsHub
 
 _LOGGER = logging.getLogger(__name__)

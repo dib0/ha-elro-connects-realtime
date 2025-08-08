@@ -13,14 +13,14 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
-    DOMAIN,
-    ElroDeviceTypes,
-    DEVICE_STATE_ALARM,
-    DEVICE_STATE_OPEN,
+    ATTR_BATTERY_LEVEL,
     ATTR_DEVICE_ID,
     ATTR_DEVICE_TYPE,
-    ATTR_BATTERY_LEVEL,
     ATTR_LAST_SEEN,
+    DEVICE_STATE_ALARM,
+    DEVICE_STATE_OPEN,
+    DOMAIN,
+    ElroDeviceTypes,
 )
 from .device import ElroDevice
 from .hub import ElroConnectsHub

@@ -6,7 +6,6 @@ from typing import Any
 
 from .const import DEVICE_STATE_UNKNOWN
 
-
 class ElroDevice:
     """Representation of an ELRO Connects device."""
 
