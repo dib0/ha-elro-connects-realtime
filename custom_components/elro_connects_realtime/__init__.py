@@ -134,8 +134,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hub.async_stop()
 
     # Unload platforms
-    unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, 
-                                                                       PLATFORMS)
+    unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
     # Clean up stored data
     if unload_ok:
