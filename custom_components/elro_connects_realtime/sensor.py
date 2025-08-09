@@ -1,4 +1,4 @@
-"""Sensor platform for ELRO Connects Real-time."""
+"""Sensor platform for ELRO Connects Real-time"""
 
 from __future__ import annotations
 
@@ -21,6 +21,9 @@ from .hub import ElroConnectsHub
 
 _LOGGER = logging.getLogger(__name__)
 
+# Global registry to track created entities
+_CREATED_SENSOR_ENTITIES: set[str] = set()
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -34,29 +37,40 @@ async def async_setup_entry(
 
     # Create sensors for existing devices
     for device in hub.devices.values():
-        entities.extend(_create_sensors_for_device(device, hub))
+        new_entities = _create_sensors_for_device(device, hub)
+        for entity in new_entities:
+            if entity.unique_id not in _CREATED_SENSOR_ENTITIES:
+                entities.append(entity)
+                _CREATED_SENSOR_ENTITIES.add(entity.unique_id)
+            else:
+                _LOGGER.debug("Skipping duplicate sensor entity: %s", entity.unique_id)
 
     if entities:
         async_add_entities(entities, True)
+        _LOGGER.info("Created %d sensor entities", len(entities))
 
     # Set up callback for new devices
     def _async_device_updated(device: ElroDevice) -> None:
         """Handle device updates."""
-        # Check if we need to create new entities for this device
-        existing_entities = [
-            entity
-            for entity in hass.data.get(f"{DOMAIN}_sensor_entities", [])
-            if getattr(entity, "_device_id", None) == device.id
-        ]
+        # Only create entities for devices that have received status updates
+        if device.battery_level < 0:
+            return
 
-        if not existing_entities:
-            new_entities = _create_sensors_for_device(device, hub)
-            if new_entities:
-                async_add_entities(new_entities, True)
-                # Store entities for tracking
-                if f"{DOMAIN}_sensor_entities" not in hass.data:
-                    hass.data[f"{DOMAIN}_sensor_entities"] = []
-                hass.data[f"{DOMAIN}_sensor_entities"].extend(new_entities)
+        new_entities = _create_sensors_for_device(device, hub)
+        entities_to_add = []
+
+        for entity in new_entities:
+            if entity.unique_id not in _CREATED_SENSOR_ENTITIES:
+                entities_to_add.append(entity)
+                _CREATED_SENSOR_ENTITIES.add(entity.unique_id)
+
+        if entities_to_add:
+            async_add_entities(entities_to_add, True)
+            _LOGGER.info(
+                "Added %d new sensor entities for device %d",
+                len(entities_to_add),
+                device.id,
+            )
 
     hub.add_device_update_callback(_async_device_updated)
 
@@ -67,7 +81,7 @@ def _create_sensors_for_device(
     """Create sensors for a device."""
     entities = []
 
-    # All devices get a battery sensor
+    # All devices get a battery sensor if they have battery info
     if device.battery_level >= 0:
         entities.append(ElroConnectsBatterySensor(device, hub))
 
@@ -121,11 +135,20 @@ class ElroConnectsSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass."""
+        # Always register the callback when entity is added
         self._hub.add_device_update_callback(self._async_device_updated)
+
+        # If device already exists, trigger an immediate update
+        if self._device.id in self._hub.devices:
+            self._device = self._hub.devices[self._device.id]
+            self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """When entity is removed from hass."""
         self._hub.remove_device_update_callback(self._async_device_updated)
+        # Remove from tracking
+        if self.unique_id in _CREATED_SENSOR_ENTITIES:
+            _CREATED_SENSOR_ENTITIES.remove(self.unique_id)
 
     def _async_device_updated(self, device: ElroDevice) -> None:
         """Handle device updates."""

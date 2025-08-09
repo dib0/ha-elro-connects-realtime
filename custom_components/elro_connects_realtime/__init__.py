@@ -1,15 +1,17 @@
-"""The ELRO Connects Real-time integration."""
+"""__init__.py with proper hub device creation and timing."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol  # type: ignore[import-untyped]
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CONF_DEVICE_ID, CONF_HOST, DOMAIN
@@ -35,22 +37,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ELRO Connects from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
-    # Check if we're reloading and already have a hub
-    existing_hub = None
-    if entry.entry_id in hass.data[DOMAIN]:
-        existing_hub = hass.data[DOMAIN][entry.entry_id].get("hub")
-        _LOGGER.info("Found existing hub during setup, preserving device state")
+    # Create hub device in device registry first - BEFORE creating hub instance
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={("elro_connects_realtime", "hub")},
+        name="ELRO Connects Hub",
+        manufacturer="ELRO",
+        model="Connects Real-time Hub",
+        sw_version="1.0.0",
+    )
+    _LOGGER.info("Created hub device in device registry")
 
-    # Create hub instance (reuse existing if available)
-    if existing_hub:
-        hub = existing_hub
-        # Update connection details in case they changed
-        hub._host = entry.data[CONF_HOST]
-        hub._device_id = entry.data[CONF_DEVICE_ID]
-    else:
-        hub = ElroConnectsHub(
-            host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
-        )
+    # Create hub instance
+    hub = ElroConnectsHub(
+        host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
+    )
 
     # Create coordinator for device updates
     coordinator = ElroConnectsCoordinator(hass, hub)
@@ -61,24 +63,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
-    # Start the hub connection (or restart if existing)
-    if not existing_hub:
-        await hub.async_start()
-    else:
-        # For existing hub, just ensure it's running
-        if not hub._running:
-            await hub.async_start()
+    # Start the hub connection
+    await hub.async_start()
+
+    # Wait for initial data to be received
+    await asyncio.sleep(5)  # Give more time for device discovery
 
     # Refresh initial data
     await coordinator.async_config_entry_first_refresh()
 
-    # Forward the setup to the platforms
+    # Forward the setup to the platforms (this creates entities)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     # Register services
     await _async_register_services(hass)
 
     return True
+
+
+async def _async_create_hub_device(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Create the hub device in device registry."""
+    # This function is no longer needed as we do it inline above
+    pass
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:
@@ -149,13 +155,13 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Unloading ELRO Connects integration")
 
     # Get hub instance
-    hub = hass.data[DOMAIN][entry.entry_id]["hub"]
-
-    # Safely stop the hub connection
-    try:
-        await hub.async_stop()
-    except Exception as ex:
-        _LOGGER.error("Error stopping hub during unload: %s", ex)
+    hub_data = hass.data[DOMAIN].get(entry.entry_id)
+    if hub_data:
+        hub = hub_data["hub"]
+        try:
+            await hub.async_stop()
+        except Exception as ex:
+            _LOGGER.error("Error stopping hub during unload: %s", ex)
 
     # Unload platforms
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -178,29 +184,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.error("Error removing services: %s", ex)
 
     return unload_ok
-
-
-async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Reload config entry."""
-    _LOGGER.info("Reloading ELRO Connects integration")
-
-    # Get the hub before any operations
-    hub_data = hass.data[DOMAIN].get(entry.entry_id)
-    if not hub_data:
-        _LOGGER.error("No hub data found during reload")
-        return
-
-    hub = hub_data["hub"]
-
-    # Use safe reload instead of full stop/start to preserve callbacks
-    try:
-        await hub.async_reload_safe()
-        _LOGGER.info("Successfully reloaded ELRO Connects hub connection")
-    except Exception as ex:
-        _LOGGER.error("Error during safe reload: %s", ex)
-        # If safe reload fails, fall back to full reload
-        await async_unload_entry(hass, entry)
-        await async_setup_entry(hass, entry)
 
 
 class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):

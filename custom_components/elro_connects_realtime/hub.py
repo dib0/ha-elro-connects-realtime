@@ -110,10 +110,13 @@ class ElroConnectsHub:
                 self._async_periodic_reset()
             )
 
-            # Request initial device status
+            # Request initial device status with better sequencing
             await asyncio.sleep(2)  # Give connection time to establish
-            await self.async_sync_device_status()
-            await self.async_get_device_names()
+            await self.async_get_device_names()  # Get names first
+            await asyncio.sleep(1)  # Wait for names to be received
+            await self.async_sync_devices()  # Then get status/types
+            await asyncio.sleep(1)  # Wait for status updates
+            await self.async_sync_device_status()  # Finally sync current states
 
             _LOGGER.info("ELRO Connects hub started successfully")
 
