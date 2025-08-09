@@ -1,5 +1,3 @@
-"""ELRO Connects Hub communication."""
-
 from __future__ import annotations
 
 import asyncio
@@ -52,7 +50,10 @@ class ElroConnectsHub:
         self._running = False
         self._receive_task: asyncio.Task[None] | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
+        self._periodic_reset_task: asyncio.Task[None] | None = None
         self._last_data_received = datetime.now()
+        self._last_connection_reset = datetime.now()
+        self._connection_issues = 0
 
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
 
@@ -80,23 +81,10 @@ class ElroConnectsHub:
             return
 
         self._running = True
+        self._last_connection_reset = datetime.now()
 
         try:
-            # Create UDP socket with better configuration
-            self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-            # Allow socket reuse
-            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-            # Set socket to non-blocking mode
-            self._socket.setblocking(False)
-
-            _LOGGER.info(
-                "Starting ELRO Connects hub connection to %s:%d", self._host, self._port
-            )
-
-            # Start connection
-            await self._async_send_data(f"IOT_KEY?{self._device_id}")
+            await self._async_connect()
 
             # Start receive task
             self._receive_task = asyncio.create_task(self._async_receive_data())
@@ -104,8 +92,13 @@ class ElroConnectsHub:
             # Start heartbeat task
             self._heartbeat_task = asyncio.create_task(self._async_heartbeat())
 
+            # Start periodic reset task (every 4 hours)
+            self._periodic_reset_task = asyncio.create_task(
+                self._async_periodic_reset()
+            )
+
             # Request initial device status
-            await asyncio.sleep(1)  # Give connection time to establish
+            await asyncio.sleep(2)  # Give connection time to establish
             await self.async_sync_device_status()
             await self.async_get_device_names()
 
@@ -116,52 +109,48 @@ class ElroConnectsHub:
             await self.async_stop()
             raise
 
-    async def _async_send_data(self, data: str) -> None:
-        """Send data to the hub."""
-        if not self._socket:
-            raise RuntimeError("Socket not initialized")
+    async def _async_connect(self) -> None:
+        """Establish connection to the hub."""
+        # Close existing socket if any
+        if self._socket:
+            self._socket.close()
+            self._socket = None
 
-        try:
-            # Use a wrapper function for better error handling
-            await self._hass.async_add_executor_job(self._send_data_sync, data)
-            _LOGGER.debug("Sent to %s:%d: %s", self._host, self._port, data)
-        except Exception as ex:
-            _LOGGER.error("Error sending data to %s:%d: %s", self._host, self._port, ex)
-            raise
+        # Create new UDP socket
+        self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._socket.setblocking(False)
 
-    def _send_data_sync(self, data: str) -> None:
-        """Send data synchronously with proper error handling."""
-        if not self._socket:
-            raise RuntimeError("Socket not initialized")
+        _LOGGER.info("Connecting to ELRO hub at %s:%d", self._host, self._port)
 
-        try:
-            # Temporarily set to blocking for sending
-            self._socket.setblocking(True)
-            self._socket.sendto(data.encode("utf-8"), (self._host, self._port))
-        finally:
-            # Always reset to non-blocking
-            self._socket.setblocking(False)
+        # Send initial connection request
+        await self._async_send_data(f"IOT_KEY?{self._device_id}")
+
+        # Reset connection tracking
+        self._last_data_received = datetime.now()
+        self._connection_issues = 0
 
     async def async_stop(self) -> None:
         """Stop the hub connection."""
+        _LOGGER.info("Stopping ELRO Connects hub")
         self._running = False
 
-        # Cancel tasks
-        if self._receive_task:
-            self._receive_task.cancel()
-            try:
-                await self._receive_task
-            except asyncio.CancelledError:
-                pass
-            self._receive_task = None
+        # Cancel all tasks
+        for task in [
+            self._receive_task,
+            self._heartbeat_task,
+            self._periodic_reset_task,
+        ]:
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
 
-        if self._heartbeat_task:
-            self._heartbeat_task.cancel()
-            try:
-                await self._heartbeat_task
-            except asyncio.CancelledError:
-                pass
-            self._heartbeat_task = None
+        self._receive_task = None
+        self._heartbeat_task = None
+        self._periodic_reset_task = None
 
         # Close socket
         if self._socket:
@@ -170,24 +159,106 @@ class ElroConnectsHub:
 
         _LOGGER.info("ELRO Connects hub stopped")
 
+    async def async_reload_safe(self) -> None:
+        """Safely reload the connection without losing device state."""
+        _LOGGER.info("Safely reloading ELRO Connects hub connection")
+
+        # Keep device state but reset connection
+        await self._async_reconnect()
+
+        # Refresh device data
+        await asyncio.sleep(1)
+        await self.async_sync_device_status()
+        await self.async_get_device_names()
+
+    async def _async_reconnect(self) -> None:
+        """Reconnect to the hub while preserving state."""
+        _LOGGER.info("Reconnecting to ELRO hub")
+
+        # Cancel only receive task to stop current connection
+        if self._receive_task and not self._receive_task.done():
+            self._receive_task.cancel()
+            try:
+                await self._receive_task
+            except asyncio.CancelledError:
+                pass
+
+        # Establish new connection
+        await self._async_connect()
+
+        # Restart receive task
+        self._receive_task = asyncio.create_task(self._async_receive_data())
+
+        self._last_connection_reset = datetime.now()
+        _LOGGER.info("Reconnection completed")
+
+    async def _async_periodic_reset(self) -> None:
+        """Periodically reset connection every 4 hours."""
+        while self._running:
+            try:
+                # Wait for 4 hours (14400 seconds)
+                await asyncio.sleep(14400)
+
+                if not self._running:
+                    break
+
+                _LOGGER.info("Performing scheduled 4-hour connection reset")
+                await self._async_reconnect()
+
+            except asyncio.CancelledError:
+                break
+            except Exception as ex:
+                _LOGGER.error("Error in periodic reset: %s", ex)
+                await asyncio.sleep(60)  # Wait 1 minute before retry
+
+    async def _async_send_data(self, data: str) -> None:
+        """Send data to the hub."""
+        if not self._socket:
+            raise RuntimeError("Socket not initialized")
+
+        try:
+            await self._hass.async_add_executor_job(self._send_data_sync, data)
+            _LOGGER.debug("Sent to %s:%d: %s", self._host, self._port, data)
+        except Exception as ex:
+            _LOGGER.error("Error sending data to %s:%d: %s", self._host, self._port, ex)
+            self._connection_issues += 1
+            if self._connection_issues >= 3:
+                _LOGGER.warning("Multiple send failures, reconnecting")
+                await self._async_reconnect()
+            raise
+
+    def _send_data_sync(self, data: str) -> None:
+        """Send data synchronously with proper error handling."""
+        if not self._socket:
+            raise RuntimeError("Socket not initialized")
+
+        try:
+            self._socket.setblocking(True)
+            self._socket.settimeout(5.0)  # 5 second timeout for sending
+            self._socket.sendto(data.encode("utf-8"), (self._host, self._port))
+        finally:
+            self._socket.setblocking(False)
+
     async def _async_receive_data(self) -> None:
         """Receive data from the hub."""
+        consecutive_errors = 0
+
         while self._running:
             try:
                 if not self._socket:
                     _LOGGER.error("Socket is None during receive")
                     break
 
-                # Use asyncio to wait for data instead of direct socket calls
                 try:
                     data, addr = await self._hass.async_add_executor_job(
                         self._receive_with_timeout
                     )
+                    consecutive_errors = 0  # Reset error counter on successful receive
                 except socket.timeout:
-                    # Timeout is normal, just continue the loop
+                    # Timeout is normal, continue
                     continue
                 except BlockingIOError:
-                    # No data available, wait a bit and try again
+                    # No data available, wait and continue
                     await asyncio.sleep(0.1)
                     continue
 
@@ -195,47 +266,63 @@ class ElroConnectsHub:
                 _LOGGER.debug("Received from %s: %s", addr, reply)
 
                 self._last_data_received = datetime.now()
+                self._connection_issues = 0  # Reset on successful receive
 
-                if reply.startswith("{") and reply != "{ST_answer_OK}":
+                # Handle different types of responses
+                if reply == "{ST_answer_OK}":
+                    _LOGGER.debug("Received connection acknowledgment")
+                    continue
+                elif reply.startswith("{"):
                     try:
                         msg = json.loads(reply)
                         await self._async_handle_message(msg)
-                        # Send acknowledgment
+                        # Send acknowledgment for data messages
                         await self._async_send_data("APP_answer_OK")
                     except json.JSONDecodeError as ex:
                         _LOGGER.error("Failed to parse JSON message: %s", ex)
+                else:
+                    _LOGGER.debug("Received non-JSON message: %s", reply)
 
             except OSError as ex:
-                # Handle "Resource temporarily unavailable" and other OS errors
                 if ex.errno == 11:  # EAGAIN/EWOULDBLOCK
-                    # No data available right now, wait a bit
                     await asyncio.sleep(0.1)
                     continue
-                elif self._running:
-                    _LOGGER.error("Socket OS error: %s", ex)
-                    break
+                else:
+                    consecutive_errors += 1
+                    _LOGGER.error(
+                        "Socket OS error (count: %d): %s", consecutive_errors, ex
+                    )
+                    if consecutive_errors >= 5:
+                        _LOGGER.error("Too many consecutive errors, reconnecting")
+                        await self._async_reconnect()
+                        consecutive_errors = 0
+                    else:
+                        await asyncio.sleep(1)
             except Exception as ex:
-                _LOGGER.error("Error receiving data: %s", ex)
-                if self._running:
+                consecutive_errors += 1
+                _LOGGER.error(
+                    "Error receiving data (count: %d): %s", consecutive_errors, ex
+                )
+                if consecutive_errors >= 5:
+                    _LOGGER.error("Too many consecutive errors, reconnecting")
+                    await self._async_reconnect()
+                    consecutive_errors = 0
+                else:
                     await asyncio.sleep(1)
-                    break
 
     def _receive_with_timeout(self) -> tuple[bytes, tuple[str, int]]:
         """Receive data with timeout handling."""
         if not self._socket:
             raise RuntimeError("Socket not initialized")
 
-        # Set a reasonable timeout for receiving data
-        self._socket.settimeout(0.5)
+        self._socket.settimeout(1.0)  # 1 second timeout
         try:
             return self._socket.recvfrom(4096)
         except socket.timeout:
             raise
         except BlockingIOError as ex:
-            # Convert BlockingIOError to something we can handle
             raise socket.timeout("No data available") from ex
         finally:
-            # Reset to non-blocking mode
             self._socket.setblocking(False)
 
     async def _async_handle_message(self, msg: dict[str, Any]) -> None:
@@ -245,6 +332,8 @@ class ElroConnectsHub:
 
         data = msg["params"]["data"]
         cmd_id = data.get("cmdId")
+
+        _LOGGER.debug("Handling message with cmdId: %s", cmd_id)
 
         if cmd_id == ElroCommands.DEVICE_STATUS_UPDATE:
             await self._async_handle_device_status_update(data)
@@ -296,6 +385,7 @@ class ElroConnectsHub:
                         device.state = DEVICE_STATE_UNKNOWN
 
         device.last_seen = datetime.now()
+        _LOGGER.debug("Updated device %d: %s", device_id, device.state)
         await self._async_notify_device_update(device)
 
     async def _async_handle_device_alarm_trigger(self, data: dict[str, Any]) -> None:
@@ -352,6 +442,7 @@ class ElroConnectsHub:
         """Get existing device or create new one."""
         if device_id not in self._devices:
             self._devices[device_id] = ElroDevice(device_id)
+            _LOGGER.info("Created new device: %d", device_id)
         return self._devices[device_id]
 
     async def _async_notify_device_update(self, device: ElroDevice) -> None:
@@ -427,22 +518,30 @@ class ElroConnectsHub:
                 # Wait for 30 seconds
                 await asyncio.sleep(30)
 
+                if not self._running:
+                    break
+
                 # Check if we received data recently
                 time_since_last_data = datetime.now() - self._last_data_received
-                if time_since_last_data > timedelta(minutes=1):
+                if time_since_last_data > timedelta(minutes=2):  # 2 minute timeout
                     _LOGGER.warning(
                         "No data received for %s, reconnecting", time_since_last_data
                     )
-                    # Restart connection
-                    await self._async_send_data(f"IOT_KEY?{self._device_id}")
-                    await self.async_sync_device_status()
+                    await self._async_reconnect()
+                else:
+                    _LOGGER.debug(
+                        "Data received %s ago, connection healthy", time_since_last_data
+                    )
 
-                # Sync devices periodically
-                await self.async_sync_devices()
+                # Sync devices periodically to keep connection active
+                try:
+                    await self.async_sync_devices()
+                except Exception as ex:
+                    _LOGGER.error("Error in periodic sync: %s", ex)
 
             except asyncio.CancelledError:
                 break
             except Exception as ex:
                 _LOGGER.error("Error in heartbeat: %s", ex)
                 if self._running:
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(30)

@@ -1,5 +1,3 @@
-"""The ELRO Connects Real-time integration."""
-
 from __future__ import annotations
 
 import logging
@@ -129,9 +127,16 @@ async def _async_register_services(hass: HomeAssistant) -> None:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry."""
-    # Stop the hub connection
+    _LOGGER.info("Unloading ELRO Connects integration")
+
+    # Get hub instance
     hub = hass.data[DOMAIN][entry.entry_id]["hub"]
-    await hub.async_stop()
+
+    # Safely stop the hub connection
+    try:
+        await hub.async_stop()
+    except Exception as ex:
+        _LOGGER.error("Error stopping hub during unload: %s", ex)
 
     # Unload platforms
     unload_ok: bool = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -139,14 +144,39 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Clean up stored data
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)
+        _LOGGER.info("Successfully unloaded ELRO Connects entry")
+    else:
+        _LOGGER.error("Failed to unload ELRO Connects platforms")
 
     # Remove services if this is the last entry
     if not hass.data[DOMAIN]:
-        hass.services.async_remove(DOMAIN, "test_alarm")
-        hass.services.async_remove(DOMAIN, "sync_devices")
-        hass.services.async_remove(DOMAIN, "get_device_names")
+        try:
+            hass.services.async_remove(DOMAIN, "test_alarm")
+            hass.services.async_remove(DOMAIN, "sync_devices")
+            hass.services.async_remove(DOMAIN, "get_device_names")
+            _LOGGER.info("Removed ELRO Connects services")
+        except Exception as ex:
+            _LOGGER.error("Error removing services: %s", ex)
 
     return unload_ok
+
+
+async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Reload config entry."""
+    _LOGGER.info("Reloading ELRO Connects integration")
+
+    # Get the hub before unloading
+    hub = hass.data[DOMAIN][entry.entry_id]["hub"]
+
+    # Use safe reload instead of full stop/start
+    try:
+        await hub.async_reload_safe()
+        _LOGGER.info("Successfully reloaded ELRO Connects hub connection")
+    except Exception as ex:
+        _LOGGER.error("Error during safe reload: %s", ex)
+        # If safe reload fails, fall back to full reload
+        await async_unload_entry(hass, entry)
+        await async_setup_entry(hass, entry)
 
 
 class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):
