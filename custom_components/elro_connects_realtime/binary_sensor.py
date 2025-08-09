@@ -86,7 +86,7 @@ def _create_binary_sensors_for_device(
     device: ElroDevice, hub: ElroConnectsHub
 ) -> list[ElroConnectsBinarySensor]:
     """Create binary sensors for a device based on its type."""
-    entities = []
+    entities: list[ElroConnectsBinarySensor] = []
 
     # Only create entities if device has a type
     if not device.device_type:
