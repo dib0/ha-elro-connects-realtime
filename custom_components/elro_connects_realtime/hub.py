@@ -1,3 +1,5 @@
+"""ELRO Connects Hub communication with enhanced reliability and reload support."""
+
 from __future__ import annotations
 
 import asyncio
@@ -56,6 +58,7 @@ class ElroConnectsHub:
         self._connection_issues = 0
 
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
+        self._reloading = False  # Track if we're in reload mode
 
     @property
     def devices(self) -> dict[int, ElroDevice]:
@@ -66,7 +69,12 @@ class ElroConnectsHub:
         self, callback: Callable[[ElroDevice], None]
     ) -> None:
         """Add a callback for device updates."""
-        self._device_update_callbacks.append(callback)
+        if callback not in self._device_update_callbacks:
+            self._device_update_callbacks.append(callback)
+            _LOGGER.debug(
+                "Added device update callback, total: %d",
+                len(self._device_update_callbacks),
+            )
 
     def remove_device_update_callback(
         self, callback: Callable[[ElroDevice], None]
@@ -74,6 +82,10 @@ class ElroConnectsHub:
         """Remove a callback for device updates."""
         if callback in self._device_update_callbacks:
             self._device_update_callbacks.remove(callback)
+            _LOGGER.debug(
+                "Removed device update callback, total: %d",
+                len(self._device_update_callbacks),
+            )
 
     async def async_start(self) -> None:
         """Start the hub connection."""
@@ -81,6 +93,7 @@ class ElroConnectsHub:
             return
 
         self._running = True
+        self._reloading = False
         self._last_connection_reset = datetime.now()
 
         try:
@@ -132,7 +145,7 @@ class ElroConnectsHub:
 
     async def async_stop(self) -> None:
         """Stop the hub connection."""
-        _LOGGER.info("Stopping ELRO Connects hub")
+        _LOGGER.info("Stopping ELRO Connects hub (reloading: %s)", self._reloading)
         self._running = False
 
         # Cancel all tasks
@@ -157,19 +170,40 @@ class ElroConnectsHub:
             self._socket.close()
             self._socket = None
 
-        _LOGGER.info("ELRO Connects hub stopped")
+        # Only clear callbacks if not reloading
+        if not self._reloading:
+            self._device_update_callbacks.clear()
+            _LOGGER.info("ELRO Connects hub stopped and callbacks cleared")
+        else:
+            _LOGGER.info("ELRO Connects hub stopped (callbacks preserved for reload)")
 
     async def async_reload_safe(self) -> None:
         """Safely reload the connection without losing device state."""
         _LOGGER.info("Safely reloading ELRO Connects hub connection")
+        self._reloading = True
 
-        # Keep device state but reset connection
+        # Keep device state and callbacks but reset connection
         await self._async_reconnect()
 
         # Refresh device data
         await asyncio.sleep(1)
         await self.async_sync_device_status()
         await self.async_get_device_names()
+
+        # Force update all devices to refresh entity states
+        await self._refresh_all_devices()
+
+        self._reloading = False
+        _LOGGER.info("Safe reload completed")
+
+    async def _refresh_all_devices(self) -> None:
+        """Force refresh all device states to update entities."""
+        _LOGGER.info("Refreshing %d devices", len(self._devices))
+        for device in self._devices.values():
+            # Mark as recently seen to ensure availability
+            device.last_seen = datetime.now()
+            await self._async_notify_device_update(device)
+        _LOGGER.info("Device refresh completed")
 
     async def _async_reconnect(self) -> None:
         """Reconnect to the hub while preserving state."""
@@ -452,6 +486,11 @@ class ElroConnectsHub:
 
     async def _async_notify_device_update(self, device: ElroDevice) -> None:
         """Notify callbacks of device update."""
+        _LOGGER.debug(
+            "Notifying %d callbacks for device %d",
+            len(self._device_update_callbacks),
+            device.id,
+        )
         for callback in self._device_update_callbacks:
             try:
                 callback(device)

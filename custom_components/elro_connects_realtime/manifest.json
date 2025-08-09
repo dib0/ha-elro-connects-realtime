@@ -11,5 +11,6 @@
   "version": "1.0.0",
   "dependencies": [],
   "after_dependencies": [],
-  "homeassistant": "2025.7.0"
+  "homeassistant": "2025.7.0",
+  "icon": "elro_connects_realtime:icon"
 }

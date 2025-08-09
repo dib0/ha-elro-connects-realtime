@@ -1,3 +1,4 @@
+"""The ELRO Connects Real-time integration."""
 from __future__ import annotations
 
 import logging
@@ -165,10 +166,15 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Reload config entry."""
     _LOGGER.info("Reloading ELRO Connects integration")
 
-    # Get the hub before unloading
-    hub = hass.data[DOMAIN][entry.entry_id]["hub"]
+    # Get the hub before any operations
+    hub_data = hass.data[DOMAIN].get(entry.entry_id)
+    if not hub_data:
+        _LOGGER.error("No hub data found during reload")
+        return
 
-    # Use safe reload instead of full stop/start
+    hub = hub_data["hub"]
+
+    # Use safe reload instead of full stop/start to preserve callbacks
     try:
         await hub.async_reload_safe()
         _LOGGER.info("Successfully reloaded ELRO Connects hub connection")
@@ -177,6 +183,56 @@ async def async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
         # If safe reload fails, fall back to full reload
         await async_unload_entry(hass, entry)
         await async_setup_entry(hass, entry)
+
+
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Set up ELRO Connects from a config entry."""
+    hass.data.setdefault(DOMAIN, {})
+
+    # Check if we're reloading and already have a hub
+    existing_hub = None
+    if entry.entry_id in hass.data[DOMAIN]:
+        existing_hub = hass.data[DOMAIN][entry.entry_id].get("hub")
+        _LOGGER.info("Found existing hub during setup, preserving device state")
+
+    # Create hub instance (reuse existing if available)
+    if existing_hub:
+        hub = existing_hub
+        # Update connection details in case they changed
+        hub._host = entry.data[CONF_HOST]
+        hub._device_id = entry.data[CONF_DEVICE_ID]
+    else:
+        hub = ElroConnectsHub(
+            host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
+        )
+
+    # Create coordinator for device updates
+    coordinator = ElroConnectsCoordinator(hass, hub)
+
+    # Store hub and coordinator
+    hass.data[DOMAIN][entry.entry_id] = {
+        "hub": hub,
+        "coordinator": coordinator,
+    }
+
+    # Start the hub connection (or restart if existing)
+    if not existing_hub:
+        await hub.async_start()
+    else:
+        # For existing hub, just ensure it's running
+        if not hub._running:
+            await hub.async_start()
+
+    # Refresh initial data
+    await coordinator.async_config_entry_first_refresh()
+
+    # Forward the setup to the platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Register services
+    await _async_register_services(hass)
+
+    return True
 
 
 class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):
