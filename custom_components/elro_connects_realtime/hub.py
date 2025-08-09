@@ -196,20 +196,25 @@ class ElroConnectsHub:
         """Periodically reset connection every 4 hours."""
         while self._running:
             try:
-                # Wait for 4 hours (14400 seconds)
-                await asyncio.sleep(14400)
+                # Wait for 4 hours (14400 seconds) but check running state periodically
+                for _ in range(480):  # 480 * 30 seconds = 4 hours
+                    if not self._running:
+                        return
+                    await asyncio.sleep(30)
 
-                if not self._running:
-                    break
-
-                _LOGGER.info("Performing scheduled 4-hour connection reset")
-                await self._async_reconnect()
+                if self._running:  # Double-check we're still running
+                    _LOGGER.info("Performing scheduled 4-hour connection reset")
+                    await self._async_reconnect()
 
             except asyncio.CancelledError:
                 break
             except Exception as ex:
                 _LOGGER.error("Error in periodic reset: %s", ex)
-                await asyncio.sleep(60)  # Wait 1 minute before retry
+                # Wait 1 minute before retry, but check running state every 5 seconds
+                for _ in range(12):  # 12 * 5 seconds = 1 minute
+                    if not self._running:
+                        return
+                    await asyncio.sleep(5)
 
     async def _async_send_data(self, data: str) -> None:
         """Send data to the hub."""
@@ -515,11 +520,11 @@ class ElroConnectsHub:
         """Heartbeat to maintain connection."""
         while self._running:
             try:
-                # Wait for 30 seconds
-                await asyncio.sleep(30)
-
-                if not self._running:
-                    break
+                # Wait for 30 seconds but check running state every 5 seconds
+                for _ in range(6):  # 6 * 5 seconds = 30 seconds
+                    if not self._running:
+                        return
+                    await asyncio.sleep(5)
 
                 # Check if we received data recently
                 time_since_last_data = datetime.now() - self._last_data_received
@@ -544,4 +549,8 @@ class ElroConnectsHub:
             except Exception as ex:
                 _LOGGER.error("Error in heartbeat: %s", ex)
                 if self._running:
-                    await asyncio.sleep(30)
+                    # Wait 30 seconds before retry, but check running state every 5 seconds
+                    for _ in range(6):  # 6 * 5 seconds = 30 seconds
+                        if not self._running:
+                            return
+                        await asyncio.sleep(5)
