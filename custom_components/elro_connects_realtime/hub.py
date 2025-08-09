@@ -199,7 +199,7 @@ class ElroConnectsHub:
                 # Wait for 4 hours (14400 seconds) but check running state periodically
                 for _ in range(480):  # 480 * 30 seconds = 4 hours
                     if not self._running:
-                        return
+                        return # type: ignore[unreachable]
                     await asyncio.sleep(30)
 
                 if self._running:  # Double-check we're still running
@@ -213,7 +213,7 @@ class ElroConnectsHub:
                 # Wait 1 minute before retry, but check running state every 5 seconds
                 for _ in range(12):  # 12 * 5 seconds = 1 minute
                     if not self._running:
-                        return
+                        return # type: ignore[unreachable]
                     await asyncio.sleep(5)
 
     async def _async_send_data(self, data: str) -> None:
@@ -523,7 +523,7 @@ class ElroConnectsHub:
                 # Wait for 30 seconds but check running state every 5 seconds
                 for _ in range(6):  # 6 * 5 seconds = 30 seconds
                     if not self._running:
-                        return
+                        return # type: ignore[unreachable]
                     await asyncio.sleep(5)
 
                 # Check if we received data recently
@@ -552,5 +552,5 @@ class ElroConnectsHub:
                     # Wait 30 seconds before retry, but check running state every 5 seconds
                     for _ in range(6):  # 6 * 5 seconds = 30 seconds
                         if not self._running:
-                            return
+                            return # type: ignore[unreachable]
                         await asyncio.sleep(5)
