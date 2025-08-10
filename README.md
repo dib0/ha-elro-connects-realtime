@@ -272,7 +272,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **[@jbouw](https://github.com/jbouw)** for the excellent foundation work:
   - [ha-elro-connects](https://github.com/jbouwh/ha-elro-connects) - Original Home Assistant integration
   - [lib-elro-connects](https://github.com/jbouwh/lib-elro-connects) - Core ELRO Connects library
-- This is my original reverse engineering and implementation:
+- This is my original reverse engineering and implementation with thanks for **[@hildensia]](https://github.com/hildensia)** for taking the code to a much higher level:
   - [elro_connects](https://github.com/dib0/elro_connects) - Original UDP communication implementation
 - Thanks to the original Python script authors for reverse engineering the ELRO Connects protocol
 - Home Assistant community for integration development guidelines
