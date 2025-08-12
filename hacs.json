@@ -4,6 +4,5 @@
   "hacs": "1.0.0",
   "homeassistant": "2025.7.0",
   "domains": ["binary_sensor", "sensor"],
-  "country": ["NL", "BE", "DE", "FR", "UK"],
   "iot_class": "Local Push"
 }
