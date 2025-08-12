@@ -2,7 +2,5 @@
   "name": "ELRO Connects Real-time",
   "content_in_root": false,
   "hacs": "1.0.0",
-  "homeassistant": "2025.7.0",
-  "domains": ["binary_sensor", "sensor"],
-  "iot_class": "Local Push"
+  "homeassistant": "2025.7.0"
 }
