@@ -59,15 +59,15 @@ jobs:
         run: |
           python -m json.tool custom_components/elro_connects_realtime/strings.json
 
-  # hacs:
-  #   runs-on: ubuntu-latest
-  #   name: HACS validation
-  #   steps:
-  #     - name: Check out code
-  #       uses: actions/checkout@v4
+  hacs:
+    runs-on: ubuntu-latest
+    name: HACS validation
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
       
-  #     - name: HACS validation
-  #       uses: hacs/action@main
-  #       with:
-  #         category: integration
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
    
