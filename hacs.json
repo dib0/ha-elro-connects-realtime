@@ -1,9 +1,8 @@
 {
   "name": "ELRO Connects Real-time",
   "content_in_root": false,
-  "filename": "elro_connects_realtime.zip",
+  "hacs": "1.0.0",
   "homeassistant": "2025.7.0",
-  "render_readme": true,
   "domains": ["binary_sensor", "sensor"],
   "country": ["NL", "BE", "DE", "FR", "UK"],
   "iot_class": "Local Push"
