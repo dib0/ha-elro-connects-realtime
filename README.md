@@ -1,9 +1,10 @@
 # ELRO Connects Real-time Home Assistant Integration
-
 [![GitHub Release][releases-shield]][releases]
 [![GitHub Activity][commits-shield]][commits]
 [![License][license-shield]](LICENSE)
 [![hacs][hacsbadge]][hacs]
+
+[![CI](https://github.com/dib0/ha-elro-connects-realtime/actions/workflows/ci.yml/badge.svg)](https://github.com/dib0/ha-elro-connects-realtime/actions/workflows/ci.yml)
 
 A custom Home Assistant integration for ELRO Connects security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub, offering instant alarm notifications and device state changes.
 
