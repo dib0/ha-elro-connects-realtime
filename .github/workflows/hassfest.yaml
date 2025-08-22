@@ -1,12 +1,12 @@
 # yamllint disable rule:truthy
 name: Hassfest and HACS validation
-
 on:
   pull_request:
     branches:
       - "*"
   schedule:
     - cron: "0 0 * * *"
+  workflow_dispatch:  # <-- Added this line to allow manual triggering
 
 jobs:
   validate:
@@ -14,11 +14,9 @@ jobs:
     name: Validate
     steps:
       - uses: "actions/checkout@v2"
-
       - name: HACS validation
         uses: "hacs/action@main"
         with:
           category: "integration"
-
       - name: Hassfest validation
         uses: "home-assistant/actions/hassfest@master"
