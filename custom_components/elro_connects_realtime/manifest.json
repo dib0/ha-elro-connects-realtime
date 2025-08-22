@@ -1,14 +1,14 @@
 {
-  "domain": "elro_connects_realtime",
-  "name": "ELRO Connects Real-time",
+  "after_dependencies": [],
   "codeowners": ["@dib0"],
   "config_flow": true,
+  "dependencies": [],
   "documentation": "https://github.com/dib0/ha-elro-connects-realtime",
+  "domain": "elro_connects_realtime",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/dib0/ha-elro-connects-realtime/issues",
+  "name": "ELRO Connects Real-time",
   "requirements": [],
-  "version": "1.0.0",
-  "dependencies": [],
-  "after_dependencies": []
+  "version": "1.0.0"
 }
