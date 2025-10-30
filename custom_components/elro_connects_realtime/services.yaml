@@ -18,13 +18,16 @@ test_alarm:
 sync_devices:
   name: Sync All Devices
   description: Force synchronization of all ELRO Connects devices
-  target:
-    device:
-      integration: elro_connects_realtime
+  # Remove the target: device section here, as it's not supported.
 
 get_device_names:
   name: Refresh Device Names
   description: Request updated device names from the ELRO Connects hub
-  target:
+  fields:
     device:
-      integration: elro_connects_realtime
+      name: Device
+      description: Select an ELRO Connects device
+      required: true
+      selector:
+        device:
+          integration: elro_connects_realtime
