@@ -2,8 +2,7 @@
 """
 ELRO Connects Real-time Diagnostic Tool
 
-Command-line utility for testing and debugging ELRO Connects hub communication.
-Helps diagnose connectivity issues and protocol differences between K1 and K2 connectors.
+Uses the ACTUAL protocol format from decompiled Android app (SendCommand.java)
 """
 
 import argparse
@@ -21,25 +20,65 @@ DEFAULT_PORT = 1025
 DEFAULT_CTRL_KEY = "0"
 DEFAULT_APP_ID = "0"
 
-# Command constants (from your const.py)
+# Command constants (from SendCommand.java decompiled code)
 class ElroCommands:
-    """ELRO Connects command constants."""
+    """ELRO Connects command constants from actual Android app."""
     # Send commands
     EQUIPMENT_CONTROL = 1
-    GET_DEVICE_NAME = 14
-    GET_ALL_EQUIPMENT_STATUS = 15
+    INCREASE_EQUIPMENT = 2
+    REPLACE_EQUIPMENT = 3
+    DELETE_EQUIPMENT = 4
+    MODIFY_EQUIPMENT_NAME = 5
+    CHOOSE_SCENE = 6
+    CANCEL_INCREASE_EQUIPMENT = 7
+    INCREASE_AUTOMATION = 8
+    MODIFY_AUTOMATION = 9
+    DELETE_AUTOMATION = 10
+    SEND_ACK = 11
+    SET_GATEWAY_INFO = 12
+    UPLOAD_GATEWAY_INFO = 13
+    GET_SUB_DEVICE_INFO = 16
+    UPLOAD_DEVICE_NAME = 17
+    UPLOAD_DEVICE_STATUS = 19
+    INCREASE_SCENE = 23
+    SYN_DEVICE_NAME = 24  # CORRECTED: Was 30 in our code!
+    UPLOAD_SCENE_INFO = 26
+    UPLOAD_SCENE_AUTO_INFO = 27
+    UPLOAD_CURRENT_SCENE = 28
     SYN_DEVICE_STATUS = 29
-    SYN_DEVICE_NAME = 30
-    
-    # Receive commands
-    DEVICE_NAME_REPLY = 17
-    DEVICE_STATUS_UPDATE = 19
-    DEVICE_ALARM_TRIGGER = 25
-    SCENE_STATUS_UPDATE = 26
+    SYN_AUTOMATION = 30
+    SYN_SCENE = 32
+    SCENE_HANDLE = 38
+    DELETE_SCENE = 39
+    ALARM_LIST_SYNC = 44
+    UPLOAD_ALARM_LOGS_INFO = 45
+    DELETE_GATEWAY_LIST = 46
+    SUB_DEVICE_ALARM_LIST_SYNC = 47
+    UPLOAD_SUB_DEVICE_ALARM_LOGS_INFO = 48
+    DELETE_SUB_DEVICE_ALARM_LIST = 49
+    MODIFY_SUB_ROOM = 53
+    SYN_ALL_DEVICE_STATUS = 54
+    UPLOAD_ALL_DEVICE_STATUS = 55
+    UPLOAD_ALL_DEVICE_STATUS2 = 56
+    MODIFY_AUTOMATION_NAME = 57
+    SYN_AUTOMATION_NAME = 58
+    UPLOAD_AUTOMATION_NAME = 60
+    SET_GATEWAY_VOICE = 61
+    UPLOAD_ADD_DEVICE = 62
+    UPLOAD_CO2_TH_2_4 = 64
+    DELETE_CO2_TH_2_4_CHART = 65
+    UPLOAD_SUB_DEVICE_INFO = 66
+    GET_All_CO2_TH_2_4 = 67
+    UPLOAD_GSM_INFO = 69
+    SET_SIM_CODE_PHONE = 70
+    SET_SIM_CODE_MESSAGE = 71
+    GET_ALL_REPEATER_SUB_DEVICE = 75
+    UPLOAD_REPEATER_SUB_DEVICE = 76
+    SET_GATEWAY_WIFI = 77
 
 
 class ElroTestTool:
-    """ELRO Connects diagnostic and testing tool."""
+    """ELRO Connects diagnostic and testing tool with CORRECT protocol."""
     
     def __init__(self, host: str, device_id: str, port: int = DEFAULT_PORT,
                  ctrl_key: str = DEFAULT_CTRL_KEY, app_id: str = DEFAULT_APP_ID):
@@ -56,6 +95,7 @@ class ElroTestTool:
         self.receive_count = 0
         self.send_count = 0
         self.message_log: List[Dict[str, Any]] = []
+        self._msg_id = 0  # For message tracking
         
         # Statistics
         self.stats = {
@@ -106,8 +146,8 @@ class ElroTestTool:
             }
             self.message_log.append(log_entry)
             
-            self.logger.info(f"→ SENT: {message}")
-            self.logger.debug(f"  Raw bytes: {encoded.hex()}")
+            self.logger.info(f"→ SENT: {message[:100]}...")
+            self.logger.debug(f"  Raw bytes: {encoded.hex()[:120]}...")
             return True
         except Exception as ex:
             self.logger.error(f"Failed to send message: {ex}")
@@ -151,9 +191,9 @@ class ElroTestTool:
             }
             self.message_log.append(log_entry)
             
-            self.logger.info(f"← RECEIVED: {decoded}")
+            self.logger.info(f"← RECEIVED: {decoded[:100]}...")
             self.logger.debug(f"  From: {addr}")
-            self.logger.debug(f"  Raw bytes: {data.hex()}")
+            self.logger.debug(f"  Raw bytes: {data.hex()[:120]}...")
             
             # Parse known message types
             self._parse_message(data, decoded)
@@ -167,27 +207,114 @@ class ElroTestTool:
     def _parse_message(self, data: bytes, decoded: str):
         """Parse and interpret received messages."""
         try:
-            # Check if it's a command response
-            if decoded.startswith("IOT_KEY"):
+            # Try to parse as JSON (ELRO format)
+            if decoded.startswith("{"):
+                try:
+                    json_data = json.loads(decoded)
+                    action = json_data.get("action", "")
+                    
+                    if action == "NODE_ACK":
+                        dev_id = json_data.get("devID", "")
+                        msg = json_data.get("msg", {})
+                        cmd_code = msg.get("CMD_CODE", "")
+                        self.logger.info(f"  → NODE_ACK from {dev_id}, CMD_CODE={cmd_code}")
+                        
+                    elif action == "APP_SEND":
+                        # Response from hub
+                        dev_id = json_data.get("devID", "")
+                        msg = json_data.get("msg", {})
+                        cmd_code = msg.get("CMD_CODE", "")
+                        msg_id = msg.get("msg_ID", "")
+                        rev_str1 = msg.get("rev_str1", "")
+                        rev_str2 = msg.get("rev_str2", "")
+                        
+                        cmd_name = self._get_command_name(cmd_code)
+                        
+                        self.logger.info(
+                            f"  → APP_SEND: devID={dev_id}, CMD={cmd_code}({cmd_name}), "
+                            f"msgID={msg_id}, rev_str1={rev_str1[:20]}"
+                        )
+                        
+                        # Parse specific responses
+                        if cmd_code == ElroCommands.UPLOAD_DEVICE_NAME:
+                            self._parse_device_name(rev_str1, rev_str2)
+                        elif cmd_code == ElroCommands.UPLOAD_DEVICE_STATUS:
+                            self._parse_device_status(rev_str1, rev_str2)
+                            
+                    else:
+                        self.logger.info(f"  → JSON action: {action}")
+                        
+                except json.JSONDecodeError as e:
+                    self.logger.debug(f"  Could not parse as JSON: {e}")
+            
+            # Check if it's an IOT_KEY response
+            elif decoded.startswith("IOT_KEY"):
                 self.logger.info("  → IOT_KEY response detected")
-            elif len(data) >= 2:
-                # Try to parse as binary command
-                command_id = struct.unpack(">H", data[:2])[0]
-                command_name = self._get_command_name(command_id)
-                if command_name:
-                    self.logger.info(f"  → Command ID: {command_id} ({command_name})")
+                
         except Exception as ex:
             self.logger.debug(f"  Could not parse message: {ex}")
     
-    def _get_command_name(self, command_id: int) -> Optional[str]:
+    def _parse_device_name(self, device_id_hex: str, name_hex: str):
+        """Parse device name from hex."""
+        try:
+            if len(device_id_hex) >= 4:
+                device_id = int(device_id_hex[:4], 16)
+                if len(name_hex) >= 32:
+                    # Convert 32 hex chars to ASCII
+                    name_bytes = bytes.fromhex(name_hex[:32])
+                    name = ''.join(chr(b) for b in name_bytes if b != 0).replace('@', '').replace('$', '')
+                    self.logger.info(f"    Device {device_id}: '{name}'")
+        except Exception as e:
+            self.logger.debug(f"    Could not parse device name: {e}")
+    
+    def _parse_device_status(self, device_id_hex: str, status_data: str):
+        """Parse device status."""
+        try:
+            if len(device_id_hex) >= 4:
+                device_id = int(device_id_hex[:4], 16)
+                device_type = status_data[:4] if len(status_data) >= 4 else "????"
+                battery = "N/A"
+                if len(status_data) >= 6:
+                    battery = f"{int(status_data[4:6], 16)}%"
+                state = status_data[6:] if len(status_data) > 6 else ""
+                
+                self.logger.info(
+                    f"    Device {device_id}: Type={device_type}, Battery={battery}, State={state}"
+                )
+        except Exception as e:
+            self.logger.debug(f"    Could not parse device status: {e}")
+    
+    def _get_command_name(self, command_id: int) -> str:
         """Get human-readable command name."""
         command_map = {
-            17: "DEVICE_NAME_REPLY",
-            19: "DEVICE_STATUS_UPDATE",
-            25: "DEVICE_ALARM_TRIGGER",
-            26: "SCENE_STATUS_UPDATE",
+            1: "EQUIPMENT_CONTROL",
+            17: "UPLOAD_DEVICE_NAME",
+            19: "UPLOAD_DEVICE_STATUS",
+            24: "SYN_DEVICE_NAME",
+            29: "SYN_DEVICE_STATUS",
+            54: "SYN_ALL_DEVICE_STATUS",
         }
-        return command_map.get(command_id)
+        return command_map.get(command_id, f"CMD_{command_id}")
+    
+    def _construct_message(self, cmd_code: int, rev_str1: str = "", 
+                          rev_str2: str = "", rev_str3: str = "") -> str:
+        """Construct message in ACTUAL ELRO UDP format from Android app."""
+        self._msg_id += 1
+        
+        # This is the REAL format from SendCommand.java!
+        message = {
+            "action": "APP_SEND",  # NOT "appSend"!
+            "devID": self.device_id,  # At root level, NOT in params!
+            "msg": {  # NOT "params"!
+                "msg_ID": self._msg_id,
+                "CMD_CODE": cmd_code,  # NOT "cmdId"!
+                "rev_str1": rev_str1,
+                "rev_str2": rev_str2,
+                "rev_str3": rev_str3
+            }
+        }
+        
+        return json.dumps(message)
     
     async def send_iot_key_query(self):
         """Send IOT_KEY query to hub."""
@@ -195,19 +322,40 @@ class ElroTestTool:
         self.send_message(message)
     
     async def send_sync_devices(self):
-        """Send sync devices command."""
-        # Format: {DEVICE_CTRL_KEY}{APP_ID}{DEVICE_ID}{CMD_ID}
-        message = f"{self.ctrl_key}{self.app_id}{self.device_id}{ElroCommands.SYN_DEVICE_STATUS}"
+        """Send sync devices command (CMD_CODE=29)."""
+        message = self._construct_message(
+            cmd_code=ElroCommands.SYN_DEVICE_STATUS,
+            rev_str1="",
+            rev_str2=""
+        )
         self.send_message(message)
     
     async def send_get_device_names(self):
-        """Send get device names command."""
-        message = f"{self.ctrl_key}{self.app_id}{self.device_id}{ElroCommands.SYN_DEVICE_NAME}"
+        """Send get device names command (CMD_CODE=24)."""
+        message = self._construct_message(
+            cmd_code=ElroCommands.SYN_DEVICE_NAME,
+            rev_str1="0",  # Device ID 0 = all devices
+            rev_str2=""
+        )
         self.send_message(message)
     
     async def send_get_all_status(self):
-        """Send get all equipment status command."""
-        message = f"{self.ctrl_key}{self.app_id}{self.device_id}{ElroCommands.GET_ALL_EQUIPMENT_STATUS}"
+        """Send get all device status command (CMD_CODE=54)."""
+        message = self._construct_message(
+            cmd_code=ElroCommands.SYN_ALL_DEVICE_STATUS,
+            rev_str1="",
+            rev_str2=""
+        )
+        self.send_message(message)
+    
+    async def send_device_control(self, device_id: int, command: str):
+        """Send device control command (CMD_CODE=1)."""
+        device_id_hex = format(device_id, '04X')
+        message = self._construct_message(
+            cmd_code=ElroCommands.EQUIPMENT_CONTROL,
+            rev_str1=device_id_hex,
+            rev_str2=command
+        )
         self.send_message(message)
     
     async def monitor_mode(self, duration: int):
@@ -216,6 +364,7 @@ class ElroTestTool:
         self.logger.info(f"Starting monitoring mode for {duration} seconds")
         self.logger.info(f"Hub: {self.host}:{self.port}")
         self.logger.info(f"Device ID: {self.device_id}")
+        self.logger.info(f"Using CORRECTED protocol from Android app")
         self.logger.info(f"{'='*70}\n")
         
         if not self.setup_socket():
@@ -223,6 +372,7 @@ class ElroTestTool:
         
         # Send initial IOT_KEY query
         await self.send_iot_key_query()
+        await asyncio.sleep(1)
         
         self.running = True
         self.last_received = datetime.now()
@@ -262,6 +412,7 @@ class ElroTestTool:
         self.logger.info("Testing connectivity to ELRO Connects hub")
         self.logger.info(f"Hub: {self.host}:{self.port}")
         self.logger.info(f"Device ID: {self.device_id}")
+        self.logger.info(f"Using CORRECTED protocol from decompiled Android app!")
         self.logger.info(f"{'='*70}\n")
         
         if not self.setup_socket():
@@ -285,8 +436,8 @@ class ElroTestTool:
             self.logger.error("✗ No response to IOT_KEY query\n")
             return False
         
-        # Test 2: Sync devices
-        self.logger.info("Test 2: Requesting device sync...")
+        # Test 2: Sync devices (CMD_CODE=29)
+        self.logger.info("Test 2: Requesting device sync (CMD_CODE=29)...")
         await self.send_sync_devices()
         
         # Wait for responses
@@ -300,8 +451,8 @@ class ElroTestTool:
         else:
             self.logger.warning("⚠ No additional messages received after sync\n")
         
-        # Test 3: Get device names
-        self.logger.info("Test 3: Requesting device names...")
+        # Test 3: Get device names (CMD_CODE=24, CORRECTED!)
+        self.logger.info("Test 3: Requesting device names (CMD_CODE=24)...")
         await self.send_get_device_names()
         
         # Wait for responses
@@ -315,6 +466,21 @@ class ElroTestTool:
         else:
             self.logger.warning("⚠ No additional messages received\n")
         
+        # Test 4: Get all status (CMD_CODE=54)
+        self.logger.info("Test 4: Requesting all device status (CMD_CODE=54)...")
+        await self.send_get_all_status()
+        
+        # Wait for responses
+        initial_count = self.receive_count
+        for _ in range(20):  # Wait up to 10 seconds
+            await self.receive_messages(timeout=0.5)
+        
+        new_messages = self.receive_count - initial_count
+        if new_messages > 0:
+            self.logger.info(f"✓ Received {new_messages} messages after all status request\n")
+        else:
+            self.logger.warning("⚠ No additional messages received\n")
+        
         self._print_statistics()
         return True
     
@@ -324,6 +490,7 @@ class ElroTestTool:
         self.logger.info("Interactive mode - ELRO Connects Test Tool")
         self.logger.info(f"Hub: {self.host}:{self.port}")
         self.logger.info(f"Device ID: {self.device_id}")
+        self.logger.info(f"Using CORRECTED PROTOCOL!")
         self.logger.info(f"{'='*70}\n")
         
         if not self.setup_socket():
@@ -336,10 +503,10 @@ class ElroTestTool:
         
         print("\nAvailable commands:")
         print("  1 - Send IOT_KEY query")
-        print("  2 - Sync devices")
-        print("  3 - Get device names")
-        print("  4 - Get all equipment status")
-        print("  5 - Send custom message")
+        print("  2 - Sync devices (CMD_CODE=29)")
+        print("  3 - Get device names (CMD_CODE=24)")
+        print("  4 - Get all device status (CMD_CODE=54)")
+        print("  5 - Send custom APP_SEND message")
         print("  s - Show statistics")
         print("  l - Show message log")
         print("  q - Quit")
@@ -362,7 +529,11 @@ class ElroTestTool:
                     elif cmd == "4":
                         await self.send_get_all_status()
                     elif cmd == "5":
-                        msg = input("Enter message: ")
+                        cmd_code = int(input("CMD_CODE: "))
+                        rev_str1 = input("rev_str1: ")
+                        rev_str2 = input("rev_str2: ")
+                        rev_str3 = input("rev_str3 (optional): ")
+                        msg = self._construct_message(cmd_code, rev_str1, rev_str2, rev_str3)
                         self.send_message(msg)
                     elif cmd == "s":
                         self._print_statistics()
@@ -374,6 +545,8 @@ class ElroTestTool:
                         print("Unknown command")
                 except EOFError:
                     break
+                except ValueError as e:
+                    print(f"Invalid input: {e}")
         except KeyboardInterrupt:
             print("\nInterrupted by user")
         finally:
@@ -416,10 +589,13 @@ class ElroTestTool:
         for entry in self.message_log[-last_n:]:
             direction_symbol = "→" if entry["direction"] == "SENT" else "←"
             print(f"\n{direction_symbol} {entry['timestamp']}")
-            print(f"  {entry['message']}")
+            msg = entry['message']
+            if len(msg) > 200:
+                msg = msg[:200] + "..."
+            print(f"  {msg}")
             if 'source' in entry:
                 print(f"  From: {entry['source']}")
-            print(f"  Bytes: {entry['bytes']}, Raw: {entry['raw'][:60]}...")
+            print(f"  Bytes: {entry['bytes']}")
         
         print(f"{'='*70}\n")
     
@@ -433,6 +609,7 @@ class ElroTestTool:
                         "device_id": self.device_id,
                         "port": self.port,
                         "timestamp": datetime.now().isoformat(),
+                        "protocol": "CORRECTED - From Android app decompile"
                     },
                     "statistics": {
                         k: str(v) if isinstance(v, timedelta) else v
@@ -466,29 +643,39 @@ def setup_logging(verbose: bool = False):
 async def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="ELRO Connects Real-time Diagnostic Tool",
+        description="ELRO Connects Real-time Diagnostic Tool - CORRECTED PROTOCOL",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
+This tool now uses the CORRECT protocol format from the decompiled Android app!
+
+Protocol format (from SendCommand.java):
+{
+  "action": "APP_SEND",
+  "devID": "ST_2342400722",
+  "msg": {
+    "msg_ID": 1,
+    "CMD_CODE": 29,
+    "rev_str1": "",
+    "rev_str2": "",
+    "rev_str3": ""
+  }
+}
+
 Examples:
-  # Test basic connectivity
-  python elro_test_tool.py --host 192.168.1.100 --device-id ST_abc123 --test
+  # Test with corrected protocol
+  python elro_test_tool_fixed.py --host 192.168.0.100 --device-id ST_2342400722 --test
   
   # Monitor for 5 minutes
-  python elro_test_tool.py --host 192.168.1.100 --device-id ST_abc123 --monitor 300
+  python elro_test_tool_fixed.py --host 192.168.0.100 --device-id ST_2342400722 --monitor 300
   
-  # Interactive mode with verbose logging
-  python elro_test_tool.py --host 192.168.1.100 --device-id ST_abc123 --interactive -v
-  
-  # Save log to file
-  python elro_test_tool.py --host 192.168.1.100 --device-id ST_abc123 --test --save-log test_results.json
+  # Interactive mode
+  python elro_test_tool_fixed.py --host 192.168.0.100 --device-id ST_2342400722 --interactive -v
         """
     )
     
     parser.add_argument("--host", required=True, help="Hub IP address")
-    parser.add_argument("--device-id", required=True, help="Device ID (e.g., ST_abc123)")
+    parser.add_argument("--device-id", required=True, help="Device ID (e.g., ST_2342400722)")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"UDP port (default: {DEFAULT_PORT})")
-    parser.add_argument("--ctrl-key", default=DEFAULT_CTRL_KEY, help=f"Control key (default: {DEFAULT_CTRL_KEY})")
-    parser.add_argument("--app-id", default=DEFAULT_APP_ID, help=f"App ID (default: {DEFAULT_APP_ID})")
     
     # Modes
     mode_group = parser.add_mutually_exclusive_group(required=True)
@@ -508,8 +695,6 @@ Examples:
         host=args.host,
         device_id=args.device_id,
         port=args.port,
-        ctrl_key=args.ctrl_key,
-        app_id=args.app_id
     )
     
     try:
