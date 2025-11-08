@@ -1,6 +1,6 @@
 ## ELRO Connects Real-time
 
-Real-time Home Assistant integration for ELRO Connects security devices.
+Real-time Home Assistant integration for ELRO Connects K1 and K2 security devices.
 
 ### Features
 - Direct UDP communication (so events from connected devices are handled directly)

@@ -8,8 +8,11 @@ The K2 protocol uses simple XOR encryption:
 """
 
 import json
+import logging
 import random
 from typing import Union, Optional
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class K2Codec:
@@ -33,33 +36,39 @@ class K2Codec:
             >>> msg = {"msgId": 1, "action": "syncDevStatus"}
             >>> encoded = K2Codec.encode_k2_message(msg)
         """
-        # Convert to JSON string if dict
-        if isinstance(json_data, dict):
-            json_str = json.dumps(json_data, separators=(',', ':'))
-        else:
-            json_str = json_data
+        try:
+            # Convert to JSON string if dict
+            if isinstance(json_data, dict):
+                json_str = json.dumps(json_data, separators=(',', ':'))
+            else:
+                json_str = json_data
+                
+            # Convert to UTF-8 bytes, then to hex string
+            utf8_bytes = json_str.encode('utf-8')
+            hex_string = utf8_bytes.hex()
             
-        # Convert to UTF-8 bytes, then to hex string
-        utf8_bytes = json_str.encode('utf-8')
-        hex_string = utf8_bytes.hex()
-        
-        # Generate random XOR key (0-255)
-        xor_key = random.randint(0, 255)
-        
-        # XOR mask is: key ^ 0x23
-        xor_mask = xor_key ^ K2Codec.XOR_CONSTANT
-        
-        # Build encrypted byte array
-        # First byte is the key, followed by encrypted data
-        encrypted = bytearray([xor_key])
-        
-        # Encrypt each hex byte pair
-        for i in range(0, len(hex_string), 2):
-            hex_byte = int(hex_string[i:i+2], 16)
-            encrypted_byte = hex_byte ^ xor_mask
-            encrypted.append(encrypted_byte)
+            # Generate random XOR key (0-255)
+            xor_key = random.randint(0, 255)
             
-        return bytes(encrypted)
+            # XOR mask is: key ^ 0x23
+            xor_mask = xor_key ^ K2Codec.XOR_CONSTANT
+            
+            # Build encrypted byte array
+            # First byte is the key, followed by encrypted data
+            encrypted = bytearray([xor_key])
+            
+            # Encrypt each hex byte pair
+            for i in range(0, len(hex_string), 2):
+                hex_byte = int(hex_string[i:i+2], 16)
+                encrypted_byte = hex_byte ^ xor_mask
+                encrypted.append(encrypted_byte)
+                
+            _LOGGER.debug("K2 encoded: %d bytes", len(encrypted))
+            return bytes(encrypted)
+            
+        except Exception as ex:
+            _LOGGER.error("K2 encoding error: %s", ex)
+            raise
     
     @staticmethod
     def decode_k2_message(data: bytes) -> Optional[dict]:
@@ -78,6 +87,7 @@ class K2Codec:
             >>> print(decoded['action'])
         """
         if not data or len(data) < 2:
+            _LOGGER.debug("K2 decode: insufficient data")
             return None
             
         try:
@@ -109,10 +119,13 @@ class K2Codec:
                 json_str = json_str[:json_str.index('}') + 1]
             
             # Parse JSON
-            return json.loads(json_str)
+            decoded = json.loads(json_str)
+            _LOGGER.debug("K2 decoded successfully: %s", json_str[:100])
+            return decoded
             
-        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as e:
-            print(f"K2 decode error: {e}")
+        except (ValueError, UnicodeDecodeError, json.JSONDecodeError) as ex:
+            _LOGGER.error("K2 decode error: %s", ex)
+            _LOGGER.debug("K2 decode failed data: %s", data.hex()[:120])
             return None
     
     @staticmethod
@@ -131,21 +144,21 @@ class K2Codec:
         if not data or len(data) < 2:
             return False
             
-        # K1 messages start with '{' (0x7B)
-        # K2 messages are encrypted, so first byte is random key
-        # and second byte won't be recognizable ASCII
-        
+        # Quick check: K1 messages start with '{' (0x7B)
+        if data[0] == 0x7B:
+            return False
+            
         # Try to decode as UTF-8 - K1 will succeed, K2 will fail
         try:
             text = data.decode('utf-8')
             # If it decodes and starts with '{', it's K1
-            return not text.startswith('{')
+            return not text.strip().startswith('{')
         except UnicodeDecodeError:
             # Can't decode as UTF-8, likely K2 binary
             return True
 
 
-# Testing functions
+# Testing functions for development
 def test_codec():
     """Test K2 encoding/decoding"""
     
@@ -177,25 +190,19 @@ def test_codec():
     print("\n4. Verification:")
     print(f"   Match: {test_msg == decoded}")
     
-    # Test 2: Decode the real K2 response from previous chat
+    # Test 2: is_k2_message detection
     print("\n" + "=" * 70)
-    print("Testing with real K2 data from hub")
+    print("Message Type Detection")
     print("=" * 70)
     
-    # This is the actual K2 response you captured
-    k2_hex = "3c643d7e7c6b7670713d253d51505b5a404c5a515b3d333d7b7a69565b3d253d4c4b402d2c2b2d2b2f2f282d2d3d333d726c783d25643d726c7840565b3d252a29333d5c525b405c505b5a3d252e26333d7b7e6b7e406c6b6d2e3d253d2f2f2f2e2f2f2f2c2f2f3d333d7b7e6b7e406c6b6d2d3d253d2f2b292b5e5e2f2f3d333d7b7e6b7e406c6b6d2c3d253d3d626215"
-    k2_bytes = bytes.fromhex(k2_hex)
+    k1_msg = b'{"action":"appSend","msgId":1}'
+    k2_msg = encoded
     
-    print(f"\nK2 data ({len(k2_bytes)} bytes):")
-    print(f"Key byte: 0x{k2_bytes[0]:02x} ({k2_bytes[0]})")
-    
-    decoded_k2 = K2Codec.decode_k2_message(k2_bytes)
-    if decoded_k2:
-        print("\nDecoded K2 message:")
-        print(json.dumps(decoded_k2, indent=2))
-    else:
-        print("\n❌ Failed to decode K2 message")
+    print(f"\nK1 message detected as K2: {K2Codec.is_k2_message(k1_msg)} (should be False)")
+    print(f"K2 message detected as K2: {K2Codec.is_k2_message(k2_msg)} (should be True)")
 
 
 if __name__ == "__main__":
+    # Setup logging
+    logging.basicConfig(level=logging.DEBUG)
     test_codec()

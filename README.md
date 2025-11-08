@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/dib0/ha-elro-connects-realtime/actions/workflows/ci.yml/badge.svg)](https://github.com/dib0/ha-elro-connects-realtime/actions/workflows/ci.yml)
 
-A custom Home Assistant integration for ELRO Connects security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub, offering instant alarm notifications and device state changes.
+A custom Home Assistant integration for ELRO Connects K1 and K2 security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub (K1 and K2), offering instant alarm notifications and device state changes.
 
 ## ✨ Key Features
 
@@ -82,7 +82,7 @@ Before setting up the integration, you need:
 3. Search for **"ELRO Connects Real-time"**
 4. Enter your hub information:
    - **IP Address**: Your hub's local IP address
-   - **Device ID**: Your hub's device identifier (e.g., `ST_ab4f224febfd`)
+   - **Device ID**: Your hub's device identifier (e.g., `ST_ab4f224febfd` (This is case sensitive. For the K2 it has to be uppercase: `ST_AB4F224FEBFD`))
    - **Control Key**: Leave as default (`0`) unless specified otherwise
    - **App ID**: Leave as default (`0`) unless specified otherwise
 5. Click **Submit**
