@@ -683,7 +683,9 @@ class ElroConnectsHub:
     def _get_or_create_device(self, device_id: int) -> ElroDevice:
         """Get existing device or create new one."""
         if device_id not in self._devices:
-            self._devices[device_id] = ElroDevice(device_id)
+            self._devices[device_id] = ElroDevice(
+                device_id, self._device_id
+            )  # Pass hub device_id
             _LOGGER.info("Created new device: %d", device_id)
         return self._devices[device_id]
 

@@ -11,9 +11,10 @@ from .const import DEVICE_STATE_UNKNOWN
 class ElroDevice:
     """Representation of an ELRO Connects device."""
 
-    def __init__(self, device_id: int) -> None:
+    def __init__(self, device_id: int, hub_device_id: str = None) -> None:
         """Initialize the device."""
         self.id = device_id
+        self._hub_device_id = hub_device_id or "hub"  # Store hub device ID
         self.name: str | None = None
         self.device_type: str | None = None
         self.state = DEVICE_STATE_UNKNOWN
@@ -38,12 +39,14 @@ class ElroDevice:
     @property
     def device_info(self) -> dict[str, Any]:
         """Return device information for device registry."""
+        # Get hub device_id from somewhere - need to pass it to ElroDevice
+        # For now, we need to modify ElroDevice to store hub_device_id
         return {
             "identifiers": {("elro_connects_realtime", self.unique_id)},
             "name": self.name or f"ELRO Device {self.id}",
             "manufacturer": "ELRO",
             "model": self._get_model_name(),
-            "via_device": ("elro_connects_realtime", "hub"),
+            "via_device": ("elro_connects_realtime", self._hub_device_id),
         }
 
     def _get_model_name(self) -> str:

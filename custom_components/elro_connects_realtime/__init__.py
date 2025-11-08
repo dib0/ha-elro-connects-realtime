@@ -41,8 +41,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
-        identifiers={("elro_connects_realtime", "hub")},
-        name="ELRO Connects Hub",
+        identifiers={
+            ("elro_connects_realtime", entry.data[CONF_DEVICE_ID])
+        },  # Changed: use device_id
+        name=f"ELRO Connects Hub ({entry.data[CONF_DEVICE_ID]})",  # Changed: unique name
         manufacturer="ELRO",
         model="Connects Real-time Hub",
         sw_version="1.0.0",
