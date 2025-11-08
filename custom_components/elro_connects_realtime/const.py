@@ -36,9 +36,8 @@ class ElroCommands:
     GET_ALL_SCENE_INFO = 18
     TIME_CHECK = 21
     INCREACE_SCENE_GROUP = 23
-    MODIFY_SCENE_GROUP = 24
+    SYN_DEVICE_NAME = 24  # K2 command for device names
     SYN_DEVICE_STATUS = 29
-    SYN_DEVICE_NAME = 30
     SYN_SCENE = 31
     SCENE_HANDLE = 32
     SCENE_GROUP_DELETE = 33
@@ -46,6 +45,7 @@ class ElroCommands:
     MODEL_TIMER_SYN = 35
     UPLOAD_MODEL_TIMER = 36
     MODEL_TIMER_DEL = 37
+    SYN_ALL_DEVICE_STATUS = 54  # K2 hub command
     SEND_TIMEZONE = 251
 
     # Receive commands

@@ -382,12 +382,22 @@ class ElroConnectsHub:
                             and "msg" in msg
                             and "CMD_CODE" in msg.get("msg", {})
                         ):
-                            # K2 structure (but plain JSON response)
-                            if not self._detected_protocol and not self._force_protocol:
-                                self._detected_protocol = "K2"
-                                self._use_k2 = True
-                                _LOGGER.info("🔍 Protocol auto-detected: K2")
-
+                            # K2 structure detected
+                            # Check if this is NODE_ACK (initial handshake response)
+                            if msg.get("action") == "NODE_ACK":
+                                # NODE_ACK from primary hub - this hub speaks K2
+                                if not self._detected_protocol and not self._force_protocol:
+                                    if addr[0] == self._host:
+                                        # Response from target hub = pure K2 hub
+                                        self._detected_protocol = "K2"
+                                        self._use_k2 = True
+                                        _LOGGER.info("🔍 Pure K2 hub detected at %s", addr[0])
+                                    else:
+                                        # Response from different IP = mixed protocol
+                                        self._detected_protocol = "K1 (mixed)"
+                                        _LOGGER.info("🔍 Mixed protocol: K2 hub at %s, K1 devices from %s", 
+                                                   self._host, addr[0])
+                            
                             await self._async_handle_message(msg)
                             # Send K2 acknowledgment (encrypted)
                             ack_msg = {"action": "APP_ACK"}
@@ -501,12 +511,17 @@ class ElroConnectsHub:
 
             # Map K2 command codes to handlers
             if action in ["NODE_SEND", "APP_SEND"]:
-                _LOGGER.debug("K2 message content: %s", inner_msg)  # ADD THIS
+                _LOGGER.debug("K2 message content: %s", inner_msg)
                 if cmd_code == 17:  # UPLOAD_DEVICE_NAME
                     await self._async_handle_k2_device_name(inner_msg)
                 elif cmd_code == 19:  # UPLOAD_DEVICE_STATUS
-                    _LOGGER.debug("Calling K2 device status handler")  # ADD THIS
+                    _LOGGER.debug("Calling K2 device status handler (CMD 19)")
                     await self._async_handle_k2_device_status(inner_msg)
+                elif cmd_code == 55:  # Alternative status format
+                    _LOGGER.debug("Calling K2 device status handler (CMD 55)")
+                    await self._async_handle_k2_device_status(inner_msg)
+                else:
+                    _LOGGER.debug("Unhandled K2 CMD_CODE: %s", cmd_code)
 
     async def _async_handle_k2_device_name(self, msg: dict[str, Any]) -> None:
         """Handle K2 device name message."""
@@ -532,64 +547,93 @@ class ElroConnectsHub:
 
     async def _async_handle_k2_device_status(self, msg: dict[str, Any]) -> None:
         """Handle K2 device status message."""
-        # Try both field name variants
-        rev_str1 = msg.get("rev_str1") or msg.get("data_str1", "")
-        rev_str2 = msg.get("rev_str2") or msg.get("data_str2", "")
+        cmd_code = msg.get("CMD_CODE")
+        data_str1 = msg.get("rev_str1") or msg.get("data_str1", "")
+        data_str2 = msg.get("rev_str2") or msg.get("data_str2", "")
 
         _LOGGER.debug(
-            "K2 status handler: rev_str1=%s, rev_str2=%s", rev_str1, rev_str2
-        )  # ADD THIS
+            "K2 status (CMD %s): data_str1='%s', data_str2='%s'", 
+            cmd_code, data_str1, data_str2
+        )
 
-        if not rev_str1 or not rev_str2:
-            _LOGGER.warning(
-                "K2 status missing data: rev_str1=%s, rev_str2=%s", rev_str1, rev_str2
-            )  # ADD THIS
+        if not data_str1:
+            _LOGGER.debug("K2 status missing data_str1")
             return
 
         try:
-            if len(rev_str1) >= 4:
-                device_id = int(rev_str1[:4], 16)
+            # CMD_CODE 55: Combined format - all data in data_str1, empty data_str2
+            if cmd_code == 55 and not data_str2 and len(data_str1) >= 14:
+                # Format: DDTTPPPPBBSS (14 chars)
+                # Example: 0100034064AA00
+                #   01 = device ID
+                #   00 = padding
+                #   03 = padding  
+                #   4064 = device type
+                #   AA = battery (170 decimal)
+                #   00 = state
+                
+                device_id = int(data_str1[:2], 16)
+                device = self._get_or_create_device(device_id)
+                
+                # Type at chars 6-9
+                device.device_type = data_str1[6:10]
+                
+                # Battery at chars 10-11
+                device.battery_level = int(data_str1[10:12], 16)
+                
+                # State at chars 12-13
+                status_code = data_str1[12:14]
+                if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
+                    device.state = DEVICE_STATE_CLOSED if status_code in ["AA", "00"] else DEVICE_STATE_OPEN
+                else:
+                    device.state = (DEVICE_STATE_ALARM if status_code == "BB" 
+                                  else DEVICE_STATE_NORMAL if status_code in ["AA", "00"]
+                                  else DEVICE_STATE_UNKNOWN)
+                
+                device.last_seen = datetime.now()
+                _LOGGER.info(
+                    "K2 (CMD 55): Device %d: type=%s, battery=%d%%, state=%s",
+                    device_id, device.device_type, device.battery_level, device.state
+                )
+                await self._async_notify_device_update(device)
+                return
+            
+            # Standard format: data_str1=device_id (4 chars), data_str2=type+battery+state
+            if data_str2 and len(data_str1) >= 4:
+                device_id = int(data_str1[:4], 16)
                 device = self._get_or_create_device(device_id)
 
-                # Parse device type and status from rev_str2
-                if len(rev_str2) >= 4:
-                    device.device_type = rev_str2[:4]
-
-                # Parse battery level
-                if len(rev_str2) >= 6:
-                    battery_level = int(rev_str2[4:6], 16)
-                    device.battery_level = battery_level
-
-                # Parse device state
-                if len(rev_str2) >= 8:
-                    status_code = rev_str2[6:8]
-
+                if len(data_str2) >= 4:
+                    device.device_type = data_str2[:4]
+                if len(data_str2) >= 6:
+                    device.battery_level = int(data_str2[4:6], 16)
+                if len(data_str2) >= 8:
+                    status_code = data_str2[6:8]
                     if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-                        device.state = (
-                            DEVICE_STATE_CLOSED
-                            if status_code == "AA"
-                            else DEVICE_STATE_OPEN
-                        )
+                        device.state = DEVICE_STATE_CLOSED if status_code == "AA" else DEVICE_STATE_OPEN
                     else:
-                        if status_code == "BB":
-                            device.state = DEVICE_STATE_ALARM
-                        elif status_code == "AA":
-                            device.state = DEVICE_STATE_NORMAL
-                        else:
-                            device.state = DEVICE_STATE_UNKNOWN
+                        device.state = (DEVICE_STATE_ALARM if status_code == "BB" 
+                                      else DEVICE_STATE_NORMAL if status_code == "AA" 
+                                      else DEVICE_STATE_UNKNOWN)
 
                 device.last_seen = datetime.now()
                 _LOGGER.info(
-                    "K2: Updated device %d: type=%s, battery=%d%%, state=%s",
-                    device_id,
-                    device.device_type,
-                    device.battery_level,
-                    device.state,
+                    "K2 (CMD %s): Device %d: type=%s, battery=%d%%, state=%s",
+                    cmd_code, device_id, device.device_type, device.battery_level, device.state
                 )
                 await self._async_notify_device_update(device)
+                
+            # Fallback: Just create device so it exists
+            elif not data_str2 and len(data_str1) >= 4:
+                device_id = int(data_str1[:4], 16)
+                device = self._get_or_create_device(device_id)
+                device.last_seen = datetime.now()
+                _LOGGER.info("K2 (CMD %s): Device %d seen (incomplete data)", cmd_code, device_id)
+                await self._async_notify_device_update(device)
 
-        except ValueError as ex:
-            _LOGGER.error("Could not parse K2 device status: %s", ex)
+        except (ValueError, IndexError) as ex:
+            _LOGGER.error("K2 parse error (CMD %s): %s (data_str1=%s, data_str2=%s)", 
+                         cmd_code, ex, data_str1, data_str2)
 
     async def _async_handle_device_status_update(self, data: dict[str, Any]) -> None:
         """Handle K1 device status update."""
@@ -772,6 +816,7 @@ class ElroConnectsHub:
 
     async def async_sync_devices(self) -> None:
         """Get all device status."""
+        # Use K1 command - will be mapped to K2 if needed
         data = json.dumps(
             {"cmdId": ElroCommands.GET_ALL_EQUIPMENT_STATUS, "device_status": ""}
         )
@@ -780,6 +825,7 @@ class ElroConnectsHub:
 
     async def async_get_device_names(self) -> None:
         """Get device names."""
+        # Use K1 command - will be mapped to K2 if needed
         data = json.dumps({"cmdId": ElroCommands.GET_DEVICE_NAME, "device_ID": 0})
         msg = self._construct_message(data)
         await self._async_send_data(msg)
