@@ -6,7 +6,7 @@ import logging
 import socket
 from typing import Any
 
-import voluptuous as vol  # type: ignore[import-untyped]
+import voluptuous as vol  # type: ignore[import-not-found]
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult

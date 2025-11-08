@@ -10,7 +10,7 @@ The K2 protocol uses simple XOR encryption:
 import json
 import logging
 import random
-from typing import Optional, Union
+from typing import Any, Optional, Union
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ class K2Codec:
                 json_str = json_str[: json_str.index("}") + 1]
 
             # Parse JSON
-            decoded = json.loads(json_str)
+            decoded: dict[str, Any] = json.loads(json_str)
             _LOGGER.debug("K2 decoded successfully: %s", json_str[:100])
             return decoded
 
@@ -159,7 +159,7 @@ class K2Codec:
 
 
 # Testing functions for development
-def test_codec():
+def test_codec() -> None:
     """Test K2 encoding/decoding"""
 
     print("=" * 70)

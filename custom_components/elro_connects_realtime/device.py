@@ -11,7 +11,7 @@ from .const import DEVICE_STATE_UNKNOWN
 class ElroDevice:
     """Representation of an ELRO Connects device."""
 
-    def __init__(self, device_id: int, hub_device_id: str = None) -> None:
+    def __init__(self, device_id: int, hub_device_id: str | None = None) -> None:
         """Initialize the device."""
         self.id = device_id
         self._hub_device_id = hub_device_id or "hub"  # Store hub device ID
