@@ -303,9 +303,8 @@ class ElroConnectsHub:
             raise RuntimeError("Socket not initialized")
 
         try:
-            # Determine which protocol to use
             if self._use_k2:
-                # K2: Encode as binary
+                # K2: Encode as encrypted binary
                 try:
                     json_data = json.loads(data)
                     encoded_data = K2Codec.encode_k2_message(json_data)
@@ -320,7 +319,7 @@ class ElroConnectsHub:
             else:
                 # K1: Send as plain JSON string
                 encoded_data = data.encode("utf-8")
-                _LOGGER.debug("Sending K1 message: %s", data)
+                _LOGGER.debug("Sending K1 message: %s", data[:100])
 
             await self._hass.async_add_executor_job(self._send_data_sync, encoded_data)
 
@@ -390,7 +389,7 @@ class ElroConnectsHub:
                                 _LOGGER.info("🔍 Protocol auto-detected: K2")
 
                             await self._async_handle_message(msg)
-                            # Send K2 acknowledgment
+                            # Send K2 acknowledgment (encrypted)
                             ack_msg = {"action": "APP_ACK"}
                             ack_data = K2Codec.encode_k2_message(ack_msg)
                             await self._hass.async_add_executor_job(
@@ -716,10 +715,9 @@ class ElroConnectsHub:
         self._msg_id += 1
 
         if self._use_k2:
-            # K2 format
+            # K2 format: Plain JSON with K2 structure (NOT encrypted)
             try:
                 data_obj = json.loads(data)
-                cmd_id = data_obj.get("cmdId")
 
                 # Map K1 cmdId to K2 CMD_CODE
                 cmd_code_map = {
@@ -729,6 +727,7 @@ class ElroConnectsHub:
                     ElroCommands.EQUIPMENT_CONTROL: 1,
                 }
 
+                cmd_id = data_obj.get("cmdId")
                 cmd_code = cmd_code_map.get(cmd_id, cmd_id)
 
                 message = {
@@ -737,13 +736,13 @@ class ElroConnectsHub:
                     "msg": {
                         "msg_ID": self._msg_id,
                         "CMD_CODE": cmd_code,
-                        "rev_str1": data_obj.get("device_status", ""),
+                        "rev_str1": "",
                         "rev_str2": "",
                         "rev_str3": "",
                     },
                 }
 
-                return json.dumps(message)
+                return json.dumps(message, separators=(",", ":"))
 
             except Exception as ex:
                 _LOGGER.error("Failed to construct K2 message: %s", ex)
