@@ -386,18 +386,26 @@ class ElroConnectsHub:
                             # Check if this is NODE_ACK (initial handshake response)
                             if msg.get("action") == "NODE_ACK":
                                 # NODE_ACK from primary hub - this hub speaks K2
-                                if not self._detected_protocol and not self._force_protocol:
+                                if (
+                                    not self._detected_protocol
+                                    and not self._force_protocol
+                                ):
                                     if addr[0] == self._host:
                                         # Response from target hub = pure K2 hub
                                         self._detected_protocol = "K2"
                                         self._use_k2 = True
-                                        _LOGGER.info("🔍 Pure K2 hub detected at %s", addr[0])
+                                        _LOGGER.info(
+                                            "🔍 Pure K2 hub detected at %s", addr[0]
+                                        )
                                     else:
                                         # Response from different IP = mixed protocol
                                         self._detected_protocol = "K1 (mixed)"
-                                        _LOGGER.info("🔍 Mixed protocol: K2 hub at %s, K1 devices from %s", 
-                                                   self._host, addr[0])
-                            
+                                        _LOGGER.info(
+                                            "🔍 Mixed protocol: K2 hub at %s, K1 devices from %s",
+                                            self._host,
+                                            addr[0],
+                                        )
+
                             await self._async_handle_message(msg)
                             # Send K2 acknowledgment (encrypted)
                             ack_msg = {"action": "APP_ACK"}
@@ -552,8 +560,10 @@ class ElroConnectsHub:
         data_str2 = msg.get("rev_str2") or msg.get("data_str2", "")
 
         _LOGGER.debug(
-            "K2 status (CMD %s): data_str1='%s', data_str2='%s'", 
-            cmd_code, data_str1, data_str2
+            "K2 status (CMD %s): data_str1='%s', data_str2='%s'",
+            cmd_code,
+            data_str1,
+            data_str2,
         )
 
         if not data_str1:
@@ -567,37 +577,50 @@ class ElroConnectsHub:
                 # Example: 0100034064AA00
                 #   01 = device ID
                 #   00 = padding
-                #   03 = padding  
+                #   03 = padding
                 #   4064 = device type
                 #   AA = battery (170 decimal)
                 #   00 = state
-                
+
                 device_id = int(data_str1[:2], 16)
                 device = self._get_or_create_device(device_id)
-                
+
                 # Type at chars 6-9
                 device.device_type = data_str1[6:10]
-                
+
                 # Battery at chars 10-11
                 device.battery_level = int(data_str1[10:12], 16)
-                
+
                 # State at chars 12-13
                 status_code = data_str1[12:14]
                 if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-                    device.state = DEVICE_STATE_CLOSED if status_code in ["AA", "00"] else DEVICE_STATE_OPEN
+                    device.state = (
+                        DEVICE_STATE_CLOSED
+                        if status_code in ["AA", "00"]
+                        else DEVICE_STATE_OPEN
+                    )
                 else:
-                    device.state = (DEVICE_STATE_ALARM if status_code == "BB" 
-                                  else DEVICE_STATE_NORMAL if status_code in ["AA", "00"]
-                                  else DEVICE_STATE_UNKNOWN)
-                
+                    device.state = (
+                        DEVICE_STATE_ALARM
+                        if status_code == "BB"
+                        else (
+                            DEVICE_STATE_NORMAL
+                            if status_code in ["AA", "00"]
+                            else DEVICE_STATE_UNKNOWN
+                        )
+                    )
+
                 device.last_seen = datetime.now()
                 _LOGGER.info(
                     "K2 (CMD 55): Device %d: type=%s, battery=%d%%, state=%s",
-                    device_id, device.device_type, device.battery_level, device.state
+                    device_id,
+                    device.device_type,
+                    device.battery_level,
+                    device.state,
                 )
                 await self._async_notify_device_update(device)
                 return
-            
+
             # Standard format: data_str1=device_id (4 chars), data_str2=type+battery+state
             if data_str2 and len(data_str1) >= 4:
                 device_id = int(data_str1[:4], 16)
@@ -610,30 +633,51 @@ class ElroConnectsHub:
                 if len(data_str2) >= 8:
                     status_code = data_str2[6:8]
                     if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-                        device.state = DEVICE_STATE_CLOSED if status_code == "AA" else DEVICE_STATE_OPEN
+                        device.state = (
+                            DEVICE_STATE_CLOSED
+                            if status_code == "AA"
+                            else DEVICE_STATE_OPEN
+                        )
                     else:
-                        device.state = (DEVICE_STATE_ALARM if status_code == "BB" 
-                                      else DEVICE_STATE_NORMAL if status_code == "AA" 
-                                      else DEVICE_STATE_UNKNOWN)
+                        device.state = (
+                            DEVICE_STATE_ALARM
+                            if status_code == "BB"
+                            else (
+                                DEVICE_STATE_NORMAL
+                                if status_code == "AA"
+                                else DEVICE_STATE_UNKNOWN
+                            )
+                        )
 
                 device.last_seen = datetime.now()
                 _LOGGER.info(
                     "K2 (CMD %s): Device %d: type=%s, battery=%d%%, state=%s",
-                    cmd_code, device_id, device.device_type, device.battery_level, device.state
+                    cmd_code,
+                    device_id,
+                    device.device_type,
+                    device.battery_level,
+                    device.state,
                 )
                 await self._async_notify_device_update(device)
-                
+
             # Fallback: Just create device so it exists
             elif not data_str2 and len(data_str1) >= 4:
                 device_id = int(data_str1[:4], 16)
                 device = self._get_or_create_device(device_id)
                 device.last_seen = datetime.now()
-                _LOGGER.info("K2 (CMD %s): Device %d seen (incomplete data)", cmd_code, device_id)
+                _LOGGER.info(
+                    "K2 (CMD %s): Device %d seen (incomplete data)", cmd_code, device_id
+                )
                 await self._async_notify_device_update(device)
 
         except (ValueError, IndexError) as ex:
-            _LOGGER.error("K2 parse error (CMD %s): %s (data_str1=%s, data_str2=%s)", 
-                         cmd_code, ex, data_str1, data_str2)
+            _LOGGER.error(
+                "K2 parse error (CMD %s): %s (data_str1=%s, data_str2=%s)",
+                cmd_code,
+                ex,
+                data_str1,
+                data_str2,
+            )
 
     async def _async_handle_device_status_update(self, data: dict[str, Any]) -> None:
         """Handle K1 device status update."""
