@@ -10,7 +10,7 @@ The K2 protocol uses simple XOR encryption:
 import json
 import logging
 import random
-from typing import Union, Optional
+from typing import Optional, Union
 
 _LOGGER = logging.getLogger(__name__)
 
