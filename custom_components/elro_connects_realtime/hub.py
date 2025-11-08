@@ -358,87 +358,80 @@ class ElroConnectsHub:
                     data, addr = await self._hass.async_add_executor_job(
                         self._receive_with_timeout
                     )
-                    consecutive_errors = 0  # Reset error counter on successful receive
+                    consecutive_errors = 0
                 except socket.timeout:
-                    # Timeout is normal, continue
                     continue
                 except BlockingIOError:
-                    # No data available, wait and continue
                     await asyncio.sleep(0.1)
                     continue
 
                 self._last_data_received = datetime.now()
-                self._connection_issues = 0  # Reset on successful receive
+                self._connection_issues = 0
 
-                # Detect protocol and decode message
-                is_k2 = K2Codec.is_k2_message(data)
+                # Try to decode as plain JSON first (both K1 and K2 send JSON responses)
+                try:
+                    reply = data.decode("utf-8").strip()
+                    _LOGGER.debug("Received message from %s: %s", addr, reply[:100])
 
-                if is_k2:
-                    # K2 encrypted message
-                    decoded_json = K2Codec.decode_k2_message(data)
-                    if decoded_json:
-                        # Successfully decoded K2
-                        _LOGGER.debug(
-                            "Received K2 message from %s: %s",
-                            addr,
-                            json.dumps(decoded_json)[:100],
-                        )
+                    # Parse JSON
+                    if reply.startswith("{"):
+                        msg = json.loads(reply)
 
-                        # Auto-detect K2 protocol
-                        if not self._detected_protocol and not self._force_protocol:
-                            self._detected_protocol = "K2"
-                            self._use_k2 = True
-                            _LOGGER.info("🔍 Protocol auto-detected: K2")
+                        # Detect protocol by message structure
+                        if (
+                            "action" in msg
+                            and "msg" in msg
+                            and "CMD_CODE" in msg.get("msg", {})
+                        ):
+                            # K2 structure (but plain JSON response)
+                            if not self._detected_protocol and not self._force_protocol:
+                                self._detected_protocol = "K2"
+                                self._use_k2 = True
+                                _LOGGER.info("🔍 Protocol auto-detected: K2")
 
-                        # Handle the decoded JSON message
-                        await self._async_handle_message(decoded_json)
-                        # Send K2 acknowledgment
-                        ack_msg = {"action": "APP_ACK"}
-                        ack_data = K2Codec.encode_k2_message(ack_msg)
-                        await self._hass.async_add_executor_job(
-                            self._send_data_sync, ack_data
-                        )
-                    else:
-                        _LOGGER.warning(
-                            "Failed to decode K2 message (%d bytes)", len(data)
-                        )
-                else:
-                    # K1 plain text message
-                    try:
-                        reply = data.decode("utf-8").strip()
-                        _LOGGER.debug("Received K1 message from %s: %s", addr, reply)
+                            await self._async_handle_message(msg)
+                            # Send K2 acknowledgment
+                            ack_msg = {"action": "APP_ACK"}
+                            ack_data = K2Codec.encode_k2_message(ack_msg)
+                            await self._hass.async_add_executor_job(
+                                self._send_data_sync, ack_data
+                            )
 
-                        # Auto-detect K1 protocol
-                        if not self._detected_protocol and not self._force_protocol:
-                            if reply.startswith("{"):
+                        elif "params" in msg and "data" in msg["params"]:
+                            # K1 structure
+                            if not self._detected_protocol and not self._force_protocol:
                                 self._detected_protocol = "K1"
                                 self._use_k2 = False
                                 _LOGGER.info("🔍 Protocol auto-detected: K1")
 
-                        # Handle different types of K1 responses
-                        if reply == "{ST_answer_OK}":
-                            _LOGGER.debug("Received connection acknowledgment")
-                            continue
-                        elif reply.startswith("{"):
-                            try:
-                                msg = json.loads(reply)
-                                await self._async_handle_message(msg)
-                                # Send K1 acknowledgment
-                                await self._async_send_data_raw("APP_answer_OK")
-                            except json.JSONDecodeError as ex:
-                                _LOGGER.error("Failed to parse K1 JSON message: %s", ex)
-                        else:
-                            _LOGGER.debug("Received non-JSON K1 message: %s", reply)
+                            await self._async_handle_message(msg)
+                            await self._async_send_data_raw("APP_answer_OK")
 
-                    except UnicodeDecodeError:
+                        elif reply == "{ST_answer_OK}":
+                            _LOGGER.debug("Received connection acknowledgment")
+                        else:
+                            await self._async_handle_message(msg)
+
+                    else:
+                        _LOGGER.debug("Received non-JSON message: %s", reply)
+
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    # Binary data - try K2 decoding
+                    decoded_json = K2Codec.decode_k2_message(data)
+                    if decoded_json:
+                        _LOGGER.debug(
+                            "Decoded K2 binary message: %s", str(decoded_json)[:100]
+                        )
+                        await self._async_handle_message(decoded_json)
+                    else:
                         _LOGGER.warning(
-                            "Received non-UTF8 data (%d bytes): %s",
+                            "Failed to decode message (%d bytes): %s",
                             len(data),
                             data.hex()[:60],
                         )
 
             except OSError as ex:
-                if ex.errno == 11:  # EAGAIN/EWOULDBLOCK
+                if ex.errno == 11:
                     await asyncio.sleep(0.1)
                     continue
                 else:
