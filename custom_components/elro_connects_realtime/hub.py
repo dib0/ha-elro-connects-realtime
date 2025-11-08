@@ -502,9 +502,11 @@ class ElroConnectsHub:
 
             # Map K2 command codes to handlers
             if action in ["NODE_SEND", "APP_SEND"]:
+                _LOGGER.debug("K2 message content: %s", inner_msg)  # ADD THIS
                 if cmd_code == 17:  # UPLOAD_DEVICE_NAME
                     await self._async_handle_k2_device_name(inner_msg)
                 elif cmd_code == 19:  # UPLOAD_DEVICE_STATUS
+                    _LOGGER.debug("Calling K2 device status handler")  # ADD THIS
                     await self._async_handle_k2_device_status(inner_msg)
 
     async def _async_handle_k2_device_name(self, msg: dict[str, Any]) -> None:
@@ -531,10 +533,18 @@ class ElroConnectsHub:
 
     async def _async_handle_k2_device_status(self, msg: dict[str, Any]) -> None:
         """Handle K2 device status message."""
-        rev_str1 = msg.get("rev_str1", "") or msg.get("data_str1", "")
-        rev_str2 = msg.get("rev_str2", "") or msg.get("data_str2", "")
+        # Try both field name variants
+        rev_str1 = msg.get("rev_str1") or msg.get("data_str1", "")
+        rev_str2 = msg.get("rev_str2") or msg.get("data_str2", "")
+
+        _LOGGER.debug(
+            "K2 status handler: rev_str1=%s, rev_str2=%s", rev_str1, rev_str2
+        )  # ADD THIS
 
         if not rev_str1 or not rev_str2:
+            _LOGGER.warning(
+                "K2 status missing data: rev_str1=%s, rev_str2=%s", rev_str1, rev_str2
+            )  # ADD THIS
             return
 
         try:
@@ -570,11 +580,17 @@ class ElroConnectsHub:
                             device.state = DEVICE_STATE_UNKNOWN
 
                 device.last_seen = datetime.now()
-                _LOGGER.debug("K2: Updated device %d: %s", device_id, device.state)
+                _LOGGER.info(
+                    "K2: Updated device %d: type=%s, battery=%d%%, state=%s",
+                    device_id,
+                    device.device_type,
+                    device.battery_level,
+                    device.state,
+                )
                 await self._async_notify_device_update(device)
 
         except ValueError as ex:
-            _LOGGER.debug("Could not parse K2 device status: %s", ex)
+            _LOGGER.error("Could not parse K2 device status: %s", ex)
 
     async def _async_handle_device_status_update(self, data: dict[str, Any]) -> None:
         """Handle K1 device status update."""
