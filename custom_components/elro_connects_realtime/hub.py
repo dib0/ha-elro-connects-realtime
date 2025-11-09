@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import socket
+import threading
 from datetime import datetime, timedelta
 from typing import Any, Callable
 
@@ -50,6 +51,7 @@ class ElroConnectsHub:
         self._force_protocol = force_protocol
 
         self._socket: socket.socket | None = None
+        self._socket_lock = threading.Lock()  # Protect socket access
         self._msg_id = 0
         self._devices: dict[int, ElroDevice] = {}
         self._running = False
@@ -161,7 +163,27 @@ class ElroConnectsHub:
         # Create new UDP socket
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        # CRITICAL: K2 hub responds to port 39555 regardless of source port!
+        # Bind to 39555 so we receive K2 hub responses
+        try:
+            self._socket.bind(("", 39555))
+            _LOGGER.info("Socket bound to port 39555 for K2 hub compatibility")
+        except OSError as ex:
+            _LOGGER.warning(
+                "Could not bind to port 39555 (may already be in use): %s", ex
+            )
+            # Try any available port as fallback
+            self._socket.bind(("", 0))
+
         self._socket.setblocking(False)
+
+        # Get the socket's local address
+        try:
+            local_addr = self._socket.getsockname()
+            _LOGGER.info("Socket local address: %s", local_addr)
+        except Exception as ex:
+            _LOGGER.debug("Socket not yet bound: %s", ex)
 
         _LOGGER.info("Connecting to ELRO hub at %s:%d", self._host, self._port)
 
@@ -333,15 +355,30 @@ class ElroConnectsHub:
         try:
             self._socket.setblocking(True)
             self._socket.settimeout(5.0)  # 5 second timeout for sending
-            self._socket.sendto(data, (self._host, self._port))
+            bytes_sent = self._socket.sendto(data, (self._host, self._port))
+            _LOGGER.debug(
+                "Sent %d bytes to %s:%d (socket %s)",
+                bytes_sent,
+                self._host,
+                self._port,
+                self._socket.getsockname(),
+            )
+        except Exception as ex:
+            _LOGGER.error("Error sending to %s:%d: %s", self._host, self._port, ex)
+            raise
         finally:
             self._socket.setblocking(False)
 
     async def _async_receive_data(self) -> None:
         """Receive data from the hub with K1/K2 auto-detection."""
         consecutive_errors = 0
+        receive_attempts = 0
 
         while self._running:
+            receive_attempts += 1
+            if receive_attempts % 100 == 0:
+                _LOGGER.debug("Receive loop alive: %d attempts", receive_attempts)
+
             try:
                 if not self._socket:
                     _LOGGER.error("Socket is None during receive")
@@ -358,6 +395,9 @@ class ElroConnectsHub:
                     await asyncio.sleep(0.1)
                     continue
 
+                _LOGGER.debug(
+                    "Raw data received (%d bytes): %s", len(data), data.hex()[:100]
+                )
                 self._last_data_received = datetime.now()
                 self._connection_issues = 0
 
@@ -401,12 +441,17 @@ class ElroConnectsHub:
                                         )
 
                             await self._async_handle_message(msg)
-                            # Send K2 acknowledgment (encrypted)
+                            # Send ACK for all K2 JSON messages (test script does this)
                             ack_msg = {"action": "APP_ACK"}
-                            ack_data = json.dumps(ack_msg).encode("utf-8")  # Plain JSON
+                            ack_data = K2Codec.encode_k2_message(ack_msg)
+                            _LOGGER.debug(
+                                "Sending encrypted APP_ACK for K2 JSON (%s)",
+                                msg.get("action"),
+                            )
                             await self._hass.async_add_executor_job(
                                 self._send_data_sync, ack_data
                             )
+                            _LOGGER.debug("APP_ACK sent")
 
                         elif "params" in msg and "data" in msg["params"]:
                             # K1 structure
@@ -426,14 +471,20 @@ class ElroConnectsHub:
                     else:
                         _LOGGER.debug("Received non-JSON message: %s", reply)
 
-                except (UnicodeDecodeError, json.JSONDecodeError):
+                except (UnicodeDecodeError, json.JSONDecodeError) as ex:
                     # Binary data - try K2 decoding
+                    _LOGGER.debug(
+                        "JSON decode failed (%s), trying K2 binary decode...",
+                        type(ex).__name__,
+                    )
                     decoded_json = K2Codec.decode_k2_message(data)
                     if decoded_json:
                         _LOGGER.debug(
                             "Decoded K2 binary message: %s", str(decoded_json)[:100]
                         )
                         await self._async_handle_message(decoded_json)
+                        # Test script does NOT send ACK for binary messages!
+                        _LOGGER.debug("K2 binary message handled (no ACK sent)")
                     else:
                         _LOGGER.warning(
                             "Failed to decode message (%d bytes): %s",
