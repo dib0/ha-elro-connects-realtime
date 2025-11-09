@@ -303,23 +303,17 @@ class ElroConnectsHub:
             raise RuntimeError("Socket not initialized")
 
         try:
-            if self._use_k2:
-                # K2: Encode as encrypted binary
-                try:
-                    json_data = json.loads(data)
-                    encoded_data = K2Codec.encode_k2_message(json_data)
-                    _LOGGER.debug(
-                        "Sending K2 message (%d bytes): %s...",
-                        len(encoded_data),
-                        encoded_data.hex()[:60],
-                    )
-                except Exception as ex:
-                    _LOGGER.error("Failed to encode K2 message: %s", ex)
-                    raise
-            else:
-                # K1: Send as plain JSON string
-                encoded_data = data.encode("utf-8")
-                _LOGGER.debug("Sending K1 message: %s", data[:100])
+            # Both K1 and K2 accept plain JSON
+            # K2 hub accepts plain JSON in APP_SEND format
+            # K2 hub RESPONDS with encrypted binary (which we decrypt on receive)
+            encoded_data = data.encode("utf-8")
+
+            protocol = "K2" if self._use_k2 else "K1"
+            _LOGGER.debug(
+                "Sending %s message: %s...",
+                protocol,
+                data[:100],
+            )
 
             await self._hass.async_add_executor_job(self._send_data_sync, encoded_data)
 
@@ -818,14 +812,30 @@ class ElroConnectsHub:
                 cmd_id = data_obj.get("cmdId")
                 cmd_code = cmd_code_map.get(cmd_id, cmd_id)
 
+                # Map K1 fields to K2 rev_str fields
+                rev_str1 = ""
+                rev_str2 = ""
+
+                # For device name command, map device_ID to rev_str1
+                if cmd_id == ElroCommands.GET_DEVICE_NAME:
+                    device_id = data_obj.get("device_ID", 0)
+                    rev_str1 = str(device_id)
+
+                # For device status commands, map device_status to rev_str2
+                elif cmd_id in [
+                    ElroCommands.GET_ALL_EQUIPMENT_STATUS,
+                    ElroCommands.SYN_DEVICE_STATUS,
+                ]:
+                    rev_str2 = data_obj.get("device_status", "")
+
                 message = {
                     "action": "APP_SEND",
                     "devID": self._device_id,
                     "msg": {
                         "msg_ID": self._msg_id,
                         "CMD_CODE": cmd_code,
-                        "rev_str1": "",
-                        "rev_str2": "",
+                        "rev_str1": rev_str1,
+                        "rev_str2": rev_str2,
                         "rev_str3": "",
                     },
                 }
