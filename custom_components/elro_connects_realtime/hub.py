@@ -403,7 +403,7 @@ class ElroConnectsHub:
                             await self._async_handle_message(msg)
                             # Send K2 acknowledgment (encrypted)
                             ack_msg = {"action": "APP_ACK"}
-                            ack_data = K2Codec.encode_k2_message(ack_msg)
+                            ack_data = json.dumps(ack_msg).encode("utf-8")  # Plain JSON
                             await self._hass.async_add_executor_job(
                                 self._send_data_sync, ack_data
                             )
