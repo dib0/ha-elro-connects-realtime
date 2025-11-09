@@ -171,7 +171,7 @@ class ElroConnectsHub:
             _LOGGER.info("Socket bound to port 39555 for K2 hub compatibility")
         except OSError as ex:
             _LOGGER.warning(
-                "Could not bind to port 39555 (may already be in use): %s", ex
+                "Could not bind to port 39555: %s. K2 hub may not work correctly.", ex
             )
             # Try any available port as fallback
             self._socket.bind(("", 0))
@@ -181,7 +181,7 @@ class ElroConnectsHub:
         # Get the socket's local address
         try:
             local_addr = self._socket.getsockname()
-            _LOGGER.info("Socket local address: %s", local_addr)
+            _LOGGER.debug("Socket local address: %s", local_addr)
         except Exception as ex:
             _LOGGER.debug("Socket not yet bound: %s", ex)
 
