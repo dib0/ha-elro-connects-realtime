@@ -18,11 +18,16 @@ from .const import (
     CONF_CTRL_KEY,
     CONF_DEVICE_ID,
     CONF_HOST,
+    CONF_PROTOCOL,
     DEFAULT_APP_ID,
     DEFAULT_CTRL_KEY,
     DEFAULT_PORT,
     DOMAIN,
+    PROTOCOL_AUTO,
+    PROTOCOL_K1,
+    PROTOCOL_K2,
 )
+from .detect import async_detect_protocol
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,6 +38,12 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
         ),
         vol.Required(CONF_DEVICE_ID): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
+        ),
+        vol.Optional(CONF_PROTOCOL, default=PROTOCOL_AUTO): selector.SelectSelector(
+            selector.SelectSelectorConfig(
+                options=[PROTOCOL_AUTO, PROTOCOL_K1, PROTOCOL_K2],
+                translation_key="protocol",
+            )
         ),
         vol.Optional(CONF_CTRL_KEY, default=DEFAULT_CTRL_KEY): selector.TextSelector(
             selector.TextSelectorConfig(type=selector.TextSelectorType.TEXT)
@@ -49,33 +60,47 @@ async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str,
 
     Data has the keys from STEP_USER_DATA_SCHEMA with
     values provided by the user.
+
+    Also resolves the hub generation: with the protocol left on "auto" the hub
+    is probed once here and the answer is stored in the entry, so setup does not
+    have to repeat the probe on every restart.
     """
-    try:
-        # Test UDP connection to the device
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(5.0)
+    protocol = data.get(CONF_PROTOCOL, PROTOCOL_AUTO)
+    if protocol == PROTOCOL_AUTO:
+        protocol = await async_detect_protocol(data[CONF_HOST], data[CONF_DEVICE_ID])
 
-        # Try to send IOT_KEY query
-        test_message = f"IOT_KEY?{data[CONF_DEVICE_ID]}"
-        await hass.async_add_executor_job(
-            sock.sendto, test_message.encode("utf-8"), (data[CONF_HOST], DEFAULT_PORT)
-        )
-
-        # Try to receive response (basic connectivity test)
+    if protocol == PROTOCOL_K1:
+        # The K2 handshake already ran (or the user picked K1); confirm the K1
+        # hub is reachable with the plain-text query it understands.
         try:
-            await hass.async_add_executor_job(sock.recv, 1024)
-        except socket.timeout:
-            # Timeout is acceptable as we just want to test connectivity
-            pass
-        finally:
-            sock.close()
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(5.0)
 
-    except Exception as ex:
-        _LOGGER.error("Error connecting to ELRO Connects hub: %s", ex)
-        raise CannotConnect from ex
+            test_message = f"IOT_KEY?{data[CONF_DEVICE_ID]}"
+            await hass.async_add_executor_job(
+                sock.sendto,
+                test_message.encode("utf-8"),
+                (data[CONF_HOST], DEFAULT_PORT),
+            )
+
+            # Try to receive response (basic connectivity test)
+            try:
+                await hass.async_add_executor_job(sock.recv, 1024)
+            except socket.timeout:
+                # Timeout is acceptable as we just want to test connectivity
+                pass
+            finally:
+                sock.close()
+
+        except Exception as ex:
+            _LOGGER.error("Error connecting to ELRO Connects hub: %s", ex)
+            raise CannotConnect from ex
 
     # Return info that you want to store in the config entry.
-    return {"title": f"ELRO Connects Real-time Hub ({data[CONF_HOST]})"}
+    return {
+        "title": f"ELRO Connects Real-time Hub ({data[CONF_HOST]})",
+        CONF_PROTOCOL: protocol,
+    }
 
 
 class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call-arg]
@@ -104,7 +129,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
                 await self.async_set_unique_id(user_input[CONF_DEVICE_ID])
                 self._abort_if_unique_id_configured()
 
-                return self.async_create_entry(title=info["title"], data=user_input)
+                return self.async_create_entry(
+                    title=info["title"],
+                    data={**user_input, CONF_PROTOCOL: info[CONF_PROTOCOL]},
+                )
 
         return self.async_show_form(
             step_id="user",

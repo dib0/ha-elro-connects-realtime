@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from elro_connects_k2_protocol.models import DeviceCapability
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -21,12 +22,30 @@ from .const import (
     DEVICE_STATE_ALARM,
     DEVICE_STATE_OPEN,
     DOMAIN,
+    PROTOCOL_K2,
     ElroDeviceTypes,
 )
 from .device import ElroDevice
-from .hub import ElroConnectsHub
+from .k2_hub import TRIGGERED_ALARM_STATES
+from .models import ElroHub
 
 _LOGGER = logging.getLogger(__name__)
+
+# Maps the device classes used by the protocol library's device profiles onto
+# Home Assistant binary sensor device classes.
+_CAPABILITY_DEVICE_CLASSES: dict[str, BinarySensorDeviceClass] = {
+    "smoke": BinarySensorDeviceClass.SMOKE,
+    "carbon_monoxide": BinarySensorDeviceClass.CO,
+    "gas": BinarySensorDeviceClass.GAS,
+    "heat": BinarySensorDeviceClass.HEAT,
+    "moisture": BinarySensorDeviceClass.MOISTURE,
+    "motion": BinarySensorDeviceClass.MOTION,
+    "door": BinarySensorDeviceClass.DOOR,
+    "window": BinarySensorDeviceClass.WINDOW,
+    "opening": BinarySensorDeviceClass.OPENING,
+    "vibration": BinarySensorDeviceClass.VIBRATION,
+    "problem": BinarySensorDeviceClass.PROBLEM,
+}
 
 # Global registry to track created entities
 _CREATED_ENTITIES: set[str] = set()
@@ -38,7 +57,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ELRO Connects binary sensor platform."""
-    hub: ElroConnectsHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
+    hub: ElroHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
 
     entities = []
 
@@ -83,7 +102,7 @@ async def async_setup_entry(
 
 
 def _create_binary_sensors_for_device(
-    device: ElroDevice, hub: ElroConnectsHub
+    device: ElroDevice, hub: ElroHub
 ) -> list[ElroConnectsBinarySensor]:
     """Create binary sensors for a device based on its type."""
     entities: list[ElroConnectsBinarySensor] = []
@@ -91,6 +110,15 @@ def _create_binary_sensors_for_device(
     # Only create entities if device has a type
     if not device.device_type:
         return entities
+
+    # K2: the protocol library resolved a device profile, which lists exactly
+    # which hazards this device reports. No type-code branching needed.
+    if device.protocol == PROTOCOL_K2:
+        return [
+            ElroConnectsCapabilitySensor(device, hub, capability)
+            for capability in device.capabilities
+            if capability.entity_type == "binary_sensor"
+        ]
 
     if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
         entities.append(ElroConnectsDoorWindowSensor(device, hub))
@@ -108,7 +136,7 @@ def _create_binary_sensors_for_device(
 class ElroConnectsBinarySensor(BinarySensorEntity):
     """Base class for ELRO Connects binary sensors."""
 
-    def __init__(self, device: ElroDevice, hub: ElroConnectsHub) -> None:
+    def __init__(self, device: ElroDevice, hub: ElroHub) -> None:
         """Initialize the binary sensor."""
         self._device = device
         self._hub = hub
@@ -225,3 +253,55 @@ class ElroConnectsAlarmSensor(ElroConnectsBinarySensor):
     def is_on(self) -> bool:
         """Return true if alarm is triggered."""
         return self._device.state == DEVICE_STATE_ALARM
+
+
+class ElroConnectsCapabilitySensor(ElroConnectsBinarySensor):
+    """Binary sensor for one capability of a K2 device.
+
+    Which capabilities a device has comes from the device profile registry in
+    the elro-connects-k2-protocol library, so a smoke/CO combi detector gets one
+    entity per hazard instead of a single generic "alarm" entity.
+    """
+
+    def __init__(
+        self, device: ElroDevice, hub: ElroHub, capability: DeviceCapability
+    ) -> None:
+        """Initialize the capability sensor."""
+        self._capability = capability
+        super().__init__(device, hub)
+        self._attr_device_class = _CAPABILITY_DEVICE_CLASSES.get(
+            capability.device_class
+        )
+
+    @property
+    def _sensor_type(self) -> str:
+        """Return the sensor type identifier."""
+        # str() so the annotation holds even where the library is unavailable
+        # for type checking (it is a Home Assistant runtime requirement).
+        return str(self._capability.key)
+
+    @property
+    def _sensor_name(self) -> str:
+        """Return the sensor name suffix."""
+        return str(self._capability.label)
+
+    @property
+    def is_on(self) -> bool | None:
+        """Return true if this capability is reporting its active state."""
+        # Thermostats repurpose the alarm byte, so the library decodes those
+        # bits into dedicated fields instead.
+        if self._capability.key == "valve":
+            return self._device.valve_open
+        if self._capability.key == "window":
+            return self._device.window_open
+        if self._device.alarm_state is None:
+            return None
+        return self._device.alarm_state in TRIGGERED_ALARM_STATES
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return additional state attributes."""
+        attrs = super().extra_state_attributes
+        attrs["alarm_state"] = self._device.alarm_state
+        attrs["raw_status"] = self._device.raw_status
+        return attrs

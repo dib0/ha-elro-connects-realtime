@@ -4,23 +4,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol  # type: ignore[import-not-found]
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import CONF_DEVICE_ID, CONF_HOST, DOMAIN
+from .const import (
+    CONF_DEVICE_ID,
+    CONF_HOST,
+    CONF_PROTOCOL,
+    DOMAIN,
+    PROTOCOL_AUTO,
+    PROTOCOL_K1,
+    PROTOCOL_K2,
+)
+from .detect import async_detect_protocol
 from .device import ElroDevice
 from .hub import ElroConnectsHub
+from .k2_hub import ElroK2Hub
+from .models import ElroHub
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+# The K2 pushes state changes, so polling only refreshes battery/signal values
+# and catches anything missed; the K1 needs the tighter loop it always had.
+UPDATE_INTERVALS = {
+    PROTOCOL_K1: timedelta(seconds=30),
+    PROTOCOL_K2: timedelta(seconds=60),
+}
 
 # Service schemas
 SERVICE_TEST_ALARM_SCHEMA = vol.Schema(
@@ -33,9 +52,30 @@ SERVICE_SYNC_DEVICES_SCHEMA = vol.Schema({})
 SERVICE_GET_DEVICE_NAMES_SCHEMA = vol.Schema({})
 
 
+async def _async_resolve_protocol(hass: HomeAssistant, entry: ConfigEntry) -> str:
+    """Return the protocol to use for this entry, detecting it when needed.
+
+    A detected result is written back to the config entry so the probe only runs
+    once per hub; entries created before protocol selection existed land here too.
+    """
+    configured = entry.data.get(CONF_PROTOCOL, PROTOCOL_AUTO)
+    if configured in (PROTOCOL_K1, PROTOCOL_K2):
+        return str(configured)
+
+    protocol = await async_detect_protocol(
+        entry.data[CONF_HOST], entry.data[CONF_DEVICE_ID]
+    )
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONF_PROTOCOL: protocol}
+    )
+    return protocol
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ELRO Connects from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    protocol = await _async_resolve_protocol(hass, entry)
 
     # Create hub device in device registry first - BEFORE creating hub instance
     device_registry = dr.async_get(hass)
@@ -46,15 +86,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         },  # Changed: use device_id
         name=f"ELRO Connects Hub ({entry.data[CONF_DEVICE_ID]})",  # Changed: unique name
         manufacturer="ELRO",
-        model="Connects Real-time Hub",
+        model=f"Connects Real-time Hub ({protocol})",
         sw_version="1.0.0",
     )
     _LOGGER.info("Created hub device in device registry")
 
     # Create hub instance
-    hub = ElroConnectsHub(
-        host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
-    )
+    hub: ElroHub
+    if protocol == PROTOCOL_K2:
+        hub = ElroK2Hub(
+            host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID]
+        )
+    else:
+        hub = ElroConnectsHub(
+            host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID], hass=hass
+        )
 
     # Create coordinator for device updates
     coordinator = ElroConnectsCoordinator(hass, hub)
@@ -65,11 +111,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "coordinator": coordinator,
     }
 
-    # Start the hub connection
-    await hub.async_start()
+    # Start the hub connection. A hub that is offline — or, for the K2, a UDP
+    # port 1025 still held by something else — is transient, so let HA retry
+    # instead of failing the entry outright.
+    try:
+        await hub.async_start()
+    except Exception as ex:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+        raise ConfigEntryNotReady(
+            f"Could not connect to the {protocol} hub at {entry.data[CONF_HOST]}: {ex}"
+        ) from ex
 
-    # Wait for initial data to be received
-    await asyncio.sleep(5)  # Give more time for device discovery
+    # The K1 hub answers asynchronously, so give device discovery time to land.
+    # The K2 hub already collected its devices during async_start().
+    if protocol != PROTOCOL_K2:
+        await asyncio.sleep(5)
 
     # Refresh initial data
     await coordinator.async_config_entry_first_refresh()
@@ -81,12 +137,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_register_services(hass)
 
     return True
-
-
-async def _async_create_hub_device(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Create the hub device in device registry."""
-    # This function is no longer needed as we do it inline above
-    pass
 
 
 async def _async_register_services(hass: HomeAssistant) -> None:
@@ -191,14 +241,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):
     """Class to manage fetching data from ELRO Connects hub."""
 
-    def __init__(self, hass: HomeAssistant, hub: ElroConnectsHub) -> None:
+    def __init__(self, hass: HomeAssistant, hub: ElroHub) -> None:
         """Initialize."""
         self.hub = hub
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=30),
+            update_interval=UPDATE_INTERVALS.get(hub.protocol, timedelta(seconds=30)),
         )
 
     async def _async_update_data(self) -> dict[int, ElroDevice]:

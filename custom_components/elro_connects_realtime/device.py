@@ -3,13 +3,22 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .const import DEVICE_STATE_UNKNOWN
+from .const import DEVICE_STATE_UNKNOWN, PROTOCOL_K1
+
+if TYPE_CHECKING:
+    from elro_connects_k2_protocol.models import DeviceCapability
 
 
 class ElroDevice:
-    """Representation of an ELRO Connects device."""
+    """Representation of an ELRO Connects device.
+
+    The K1 hub only fills in the basic fields (name, type, state, battery). The
+    K2 hub additionally resolves a device profile through the protocol library,
+    which populates ``capabilities`` and the measurement fields below; the entity
+    platforms use ``capabilities`` to decide which entities a device exposes.
+    """
 
     def __init__(self, device_id: int, hub_device_id: str | None = None) -> None:
         """Initialize the device."""
@@ -20,6 +29,22 @@ class ElroDevice:
         self.state = DEVICE_STATE_UNKNOWN
         self.battery_level = -1
         self.last_seen: datetime | None = None
+        self.protocol = PROTOCOL_K1
+
+        # K2 only: resolved from the device profile in the protocol library.
+        self.capabilities: tuple[DeviceCapability, ...] = ()
+        self.model_name: str | None = None
+        self.mains_powered = False
+        self.alarm_state: str | None = None
+        self.raw_status: str | None = None
+        self.signal_bars: int | None = None
+        self.co2_ppm: int | None = None
+        self.temperature_c: float | None = None
+        self.humidity_pct: float | None = None
+        self.temperature_setpoint: float | None = None
+        self.valve_open: bool | None = None
+        self.window_open: bool | None = None
+        self.thermostat_mode: str | None = None
 
     @property
     def unique_id(self) -> str:
@@ -52,6 +77,10 @@ class ElroDevice:
     def _get_model_name(self) -> str:
         """Get human-readable model name from device type."""
         from .const import ElroDeviceTypes
+
+        # K2 devices carry the model name resolved from the protocol library.
+        if self.model_name:
+            return self.model_name
 
         type_map = {
             ElroDeviceTypes.CO_ALARM: "CO Alarm",

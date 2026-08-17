@@ -8,13 +8,15 @@
           "host": "IP Address",
           "device_id": "Device ID (e.g., ST_abcf234adbfd)",
           "ctrl_key": "Control Key (optional)",
-          "app_id": "App ID (optional)"
+          "app_id": "App ID (optional)",
+          "protocol": "Hub protocol"
         },
         "data_description": {
           "host": "The IP address of your ELRO Connects hub on your local network",
           "device_id": "The unique device identifier of your ELRO Connects hub, usually starts with 'ST_'",
           "ctrl_key": "Control key for authentication (leave default unless specified)",
-          "app_id": "Application ID for authentication (leave default unless specified)"
+          "app_id": "Application ID for authentication (leave default unless specified)",
+          "protocol": "Leave on 'auto' to probe the hub. K1 speaks plain JSON, K2 (SF50GA) speaks the XOR-framed protocol handled by the elro-connects-k2-protocol library."
         }
       }
     },
@@ -35,6 +37,15 @@
         "data": {
           "scan_interval": "Update interval (seconds)"
         }
+      }
+    }
+  },
+  "selector": {
+    "protocol": {
+      "options": {
+        "auto": "Auto-detect",
+        "K1": "K1",
+        "K2": "K2 (SF50GA)"
       }
     }
   }

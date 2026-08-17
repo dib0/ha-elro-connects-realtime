@@ -7,10 +7,16 @@ Real-time Home Assistant integration for ELRO Connects K1 and K2 security device
 - Real-time event processing
 - Battery monitoring for wireless devices
 - Support for multiple device types
+- K2 (SF50GA) hubs are driven by the
+  [elro-connects-k2-protocol](https://github.com/ldebruijn/elro-connects-k2-protocol)
+  library, which resolves each device to a profile and creates one entity per hazard
 
 ### Supported Devices
 - Door/Window sensors
 - Fire/Smoke alarms
 - CO alarms
-- Heat alarms  
+- Gas alarms (K2)
+- Heat alarms
 - Water alarms
+- CO2/temperature/humidity detectors (K2)
+- Radiator thermostats (K2)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from elro_connects_k2_protocol.models import DeviceCapability
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -15,11 +16,19 @@ from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import ATTR_DEVICE_ID, ATTR_DEVICE_TYPE, ATTR_LAST_SEEN, DOMAIN
+from .const import ATTR_DEVICE_ID, ATTR_DEVICE_TYPE, ATTR_LAST_SEEN, DOMAIN, PROTOCOL_K2
 from .device import ElroDevice
-from .hub import ElroConnectsHub
+from .models import ElroHub
 
 _LOGGER = logging.getLogger(__name__)
+
+# Maps the device classes used by the protocol library's device profiles onto
+# Home Assistant sensor device classes.
+_CAPABILITY_DEVICE_CLASSES: dict[str, SensorDeviceClass] = {
+    "carbon_dioxide": SensorDeviceClass.CO2,
+    "temperature": SensorDeviceClass.TEMPERATURE,
+    "humidity": SensorDeviceClass.HUMIDITY,
+}
 
 # Global registry to track created entities
 _CREATED_SENSOR_ENTITIES: set[str] = set()
@@ -31,7 +40,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ELRO Connects sensor platform."""
-    hub: ElroConnectsHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
+    hub: ElroHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
 
     entities = []
 
@@ -53,7 +62,7 @@ async def async_setup_entry(
     def _async_device_updated(device: ElroDevice) -> None:
         """Handle device updates."""
         # Only create entities for devices that have received status updates
-        if device.battery_level < 0:
+        if device.battery_level < 0 and not device.device_type:
             return
 
         new_entities = _create_sensors_for_device(device, hub)
@@ -76,10 +85,24 @@ async def async_setup_entry(
 
 
 def _create_sensors_for_device(
-    device: ElroDevice, hub: ElroConnectsHub
+    device: ElroDevice, hub: ElroHub
 ) -> list[ElroConnectsSensor]:
     """Create sensors for a device."""
-    entities = []
+    entities: list[ElroConnectsSensor] = []
+
+    # K2: battery and signal come from every device, measurements only from the
+    # ones whose profile in the protocol library declares them.
+    if device.protocol == PROTOCOL_K2:
+        if not device.mains_powered and device.battery_level >= 0:
+            entities.append(ElroConnectsBatterySensor(device, hub))
+        if device.signal_bars is not None:
+            entities.append(ElroConnectsSignalSensor(device, hub))
+        entities.extend(
+            ElroConnectsCapabilitySensor(device, hub, capability)
+            for capability in device.capabilities
+            if capability.entity_type == "sensor"
+        )
+        return entities
 
     # All devices get a battery sensor if they have battery info
     if device.battery_level >= 0:
@@ -91,7 +114,7 @@ def _create_sensors_for_device(
 class ElroConnectsSensor(SensorEntity):
     """Base class for ELRO Connects sensors."""
 
-    def __init__(self, device: ElroDevice, hub: ElroConnectsHub) -> None:
+    def __init__(self, device: ElroDevice, hub: ElroHub) -> None:
         """Initialize the sensor."""
         self._device = device
         self._hub = hub
@@ -207,3 +230,80 @@ class ElroConnectsBatterySensor(ElroConnectsSensor):
             return "mdi:battery-90"
         else:
             return "mdi:battery"
+
+
+class ElroConnectsSignalSensor(ElroConnectsSensor):
+    """RF signal strength (1-4 bars) for a K2 device.
+
+    Reported without a device class: the K2 only exposes bars, and Home
+    Assistant requires a dB/dBm unit for SensorDeviceClass.SIGNAL_STRENGTH.
+    """
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_registry_enabled_default = False
+    _attr_icon = "mdi:signal"
+
+    @property
+    def _sensor_type(self) -> str:
+        """Return the sensor type identifier."""
+        return "signal"
+
+    @property
+    def _sensor_name(self) -> str:
+        """Return the sensor name suffix."""
+        return "Signal"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the signal strength in bars."""
+        return self._device.signal_bars
+
+
+class ElroConnectsCapabilitySensor(ElroConnectsSensor):
+    """Measurement sensor for one capability of a K2 device.
+
+    Which measurements a device reports comes from the device profile registry
+    in the elro-connects-k2-protocol library (CO2, temperature, humidity for the
+    GS241A, setpoint and mode for the GS361 thermostat, and so on).
+    """
+
+    def __init__(
+        self, device: ElroDevice, hub: ElroHub, capability: DeviceCapability
+    ) -> None:
+        """Initialize the capability sensor."""
+        self._capability = capability
+        super().__init__(device, hub)
+        self._attr_device_class = _CAPABILITY_DEVICE_CLASSES.get(
+            capability.device_class
+        )
+        if self._attr_device_class is not None:
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+            self._attr_native_unit_of_measurement = capability.unit
+
+    @property
+    def _sensor_type(self) -> str:
+        """Return the sensor type identifier."""
+        # str() so the annotation holds even where the library is unavailable
+        # for type checking (it is a Home Assistant runtime requirement).
+        return str(self._capability.key)
+
+    @property
+    def _sensor_name(self) -> str:
+        """Return the sensor name suffix."""
+        return str(self._capability.label)
+
+    @property
+    def native_value(self) -> int | float | str | None:
+        """Return the measured value for this capability."""
+        match self._capability.key:
+            case "co2":
+                return self._device.co2_ppm
+            case "temperature":
+                return self._device.temperature_c
+            case "humidity":
+                return self._device.humidity_pct
+            case "setpoint":
+                return self._device.temperature_setpoint
+            case "mode":
+                return self._device.thermostat_mode
+        return None

@@ -8,6 +8,11 @@
 
 A custom Home Assistant integration for ELRO Connects K1 and K2 security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub (K1 and K2), offering instant alarm notifications and device state changes.
 
+K2 hubs (SF50GA) are handled by the [elro-connects-k2-protocol][k2lib] library by
+[@ldebruijn](https://github.com/ldebruijn), which does all K2 wire work: XOR framing,
+command routing, status decoding and the device profile registry. K1 hubs keep using this
+integration's own plain-text UDP implementation.
+
 ## ✨ Key Features
 
 - **🚀 Real-time Events**: Maintains persistent connection for instant alarm notifications
@@ -19,6 +24,8 @@ A custom Home Assistant integration for ELRO Connects K1 and K2 security devices
 
 ## Supported Devices
 
+### K1 hubs
+
 | Device Type | Device Class | Features |
 |-------------|--------------|----------|
 | Door/Window Sensor | `door` | Open/Closed status, Battery level |
@@ -26,6 +33,28 @@ A custom Home Assistant integration for ELRO Connects K1 and K2 security devices
 | CO Alarm | `safety` | Alarm status, Battery level |
 | Heat Alarm | `safety` | Alarm status, Battery level |
 | Water Alarm | `safety` | Alarm status, Battery level |
+
+### K2 hubs
+
+Entities come from the device profile registry in [elro-connects-k2-protocol][k2lib], so a
+device gets one entity per hazard it actually reports plus battery and signal:
+
+| Device Type | Entities |
+|-------------|----------|
+| Smoke alarm (GS530D, GS559A, GS592A, GS556) | `smoke` |
+| CO alarm (GS816A, GS818A, GS827W) | `carbon_monoxide` |
+| Gas alarm (GS870W, GS871A) | `gas` |
+| CO + Gas combi (GS891A) | `carbon_monoxide` + `gas` |
+| Heat alarm (GS412D/A) | `heat` |
+| Water alarm (GS156D/A) | `moisture` |
+| CO2/Temperature/Humidity (GS241A) | CO2, temperature and humidity sensors |
+| Door/Window sensor (GS320D) | `door` |
+| PIR motion sensor | `motion` |
+| Radiator thermostat (GS361) | valve, open-window, setpoint, temperature, mode |
+| Sockets, sirens, buttons, repeaters | battery and signal only |
+
+Every K2 device also gets a battery sensor (skipped for mains-powered devices) and a signal
+sensor (disabled by default; enable it in the entity settings when you need it).
 
 ## Installation
 
@@ -83,8 +112,12 @@ Before setting up the integration, you need:
 4. Enter your hub information:
    - **IP Address**: Your hub's local IP address
    - **Device ID**: Your hub's device identifier (e.g., `ST_ab4f224febfd` (This is case sensitive. For the K2 it has to be uppercase: `ST_AB4F224FEBFD`))
-   - **Control Key**: Leave as default (`0`) unless specified otherwise
-   - **App ID**: Leave as default (`0`) unless specified otherwise
+   - **Hub protocol**: Leave on `Auto-detect` unless detection picks the wrong one. The
+     probe sends the K2 handshake and falls back to K1 when there is no K2 answer; the
+     result is stored in the config entry, so it only runs once per hub. Pick `K1`/`K2`
+     explicitly to skip it.
+   - **Control Key**: Leave as default (`0`) unless specified otherwise (K1 only)
+   - **App ID**: Leave as default (`0`) unless specified otherwise (K1 only)
 5. Click **Submit**
 
 The integration will automatically discover and configure your devices.
@@ -104,6 +137,10 @@ After setup, you'll see entities for each of your ELRO Connects devices:
 #### Sensors
 - **Battery Levels**: Show as `sensor.device_name_battery`
   - Value: Battery percentage (0-100%)
+- **K2 only** — signal strength (`sensor.device_name_signal`, 1-4 bars, disabled by
+  default) plus any measurements the device reports, such as
+  `sensor.device_name_co2`, `sensor.device_name_temperature` and
+  `sensor.device_name_humidity`
 
 ### Services
 
@@ -189,6 +226,11 @@ automation:
 
 ### Common Issues
 
+#### K2: port 1025 already in use
+The K2 only answers requests that come from local UDP port 1025, so the integration binds
+it. Nothing else on the Home Assistant host may hold that port — including a second copy of
+this integration or `elro_test_tool.py` running on the same machine.
+
 #### Connection Failed
 - Verify the hub IP address is correct
 - Ensure the hub is powered on and connected to your network
@@ -216,7 +258,46 @@ logger:
   default: info
   logs:
     custom_components.elro_connects_realtime: debug
+    elro_connects_k2_protocol: debug   # K2 wire-level decoding
 ```
+
+### Diagnostic Tools
+
+Both tools talk to the hub outside Home Assistant. Stop Home Assistant first when testing a
+K2 hub, or run them from another machine — see the port note above.
+
+Use `python3` explicitly - on some systems `python` is still Python 2, which cannot parse
+these files - and note that the K2 library needs Python 3.12 or newer.
+
+```bash
+python3 -m pip install --user elro-connects-k2-protocol==0.1.0
+
+# Connectivity test, protocol auto-detected
+python3 elro_test_tool.py --host 192.168.0.100 --device-id ST_2342400722 --test
+
+# Watch live events for 5 minutes
+python3 elro_test_tool.py --host 192.168.0.100 --device-id ST_2342400722 --monitor 300
+
+# Interactive: sync, names, gateway info, alarm test/silence, pairing
+python3 elro_test_tool.py --host 192.168.0.100 --device-id ST_2342400722 --interactive -v
+
+# Minimal K2-only smoke test (edit HUB_IP / DEVICE_ID at the top of the file)
+python3 test_elro_k2.py
+```
+
+On a distro-managed Python (Debian/Ubuntu), `pip` refuses to install with a PEP 668
+"externally-managed-environment" error. Either add `--break-system-packages` to the command
+above, use a virtualenv (`apt install python3-venv` first if `python3 -m venv` fails), or
+skip installing altogether and point `PYTHONPATH` at a checkout of the library:
+
+```bash
+git clone https://github.com/ldebruijn/elro-connects-k2-protocol.git
+PYTHONPATH=./elro-connects-k2-protocol python3 elro_test_tool.py --host 192.168.0.100 \
+    --device-id ST_2342400722 --test
+```
+
+Home Assistant itself is unaffected: it installs the library from `manifest.json` into its
+own environment.
 
 ### Network Requirements
 
@@ -230,10 +311,18 @@ logger:
 ### Setting Up Development Environment
 
 1. Clone this repository
-2. Create a virtual environment: `python -m venv venv`
+2. Create a virtual environment: `python3 -m venv venv` (Python 3.12 or newer)
 3. Activate it: `source venv/bin/activate` (Linux/Mac) or `venv\Scripts\activate` (Windows)
 4. Install dependencies: `pip install -r requirements_dev.txt`
 5. Run tests: `pytest`
+6. Run the same checks as CI:
+   ```bash
+   black --check custom_components/ elro_test_tool.py
+   isort --check-only custom_components/ elro_test_tool.py
+   mypy custom_components/ elro_test_tool.py
+   ```
+   The lint pins in `requirements_dev.txt` match `.github/workflows/ci.yml`; keep them in
+   sync so local runs and CI agree.
 
 ### Contributing
 
@@ -245,9 +334,11 @@ logger:
 
 ## Protocol Documentation
 
-This integration is based on reverse engineering of the ELRO Connects mobile app. The hub communicates using UDP on port 1025 with JSON messages.
+This integration is based on reverse engineering of the ELRO Connects mobile app. Both hub
+generations communicate using UDP on port 1025 with JSON messages.
 
-### Message Format
+### K1 message format
+Plain UTF-8 JSON:
 ```json
 {
   "msgId": 1,
@@ -264,12 +355,23 @@ This integration is based on reverse engineering of the ELRO Connects mobile app
 }
 ```
 
+### K2 message format
+The same JSON, XOR-framed (byte 0 is a random seed, every following byte is XORed with
+`seed ^ 0x23`) and wrapped in the `APP_SEND`/`CMD_CODE` envelope. All of that is
+implemented in [elro-connects-k2-protocol][k2lib]; its
+[protocol reference](https://github.com/ldebruijn/elro-connects-k2-protocol/blob/main/docs/protocol_reference.md)
+documents the full command set.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
+- **[@ldebruijn](https://github.com/ldebruijn)** for working out the K2 protocol and
+  publishing it as a library, which this integration uses for all K2 communication:
+  - [elro-connects-k2-protocol][k2lib] - K2 local UDP protocol library
+  - [elro-connects-k2-ha](https://github.com/ldebruijn/elro-connects-k2-ha) - his own K2 integration
 - **[@jbouw](https://github.com/jbouw)** for the excellent foundation work:
   - [ha-elro-connects](https://github.com/jbouwh/ha-elro-connects) - Original Home Assistant integration
   - [lib-elro-connects](https://github.com/jbouwh/lib-elro-connects) - Core ELRO Connects library
@@ -296,3 +398,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [hacs]: https://github.com/hacs/integration
 [hacsbadge]: https://img.shields.io/badge/HACS-Default-orange.svg?style=for-the-badge
 [issues]: https://github.com/dib0/ha-elro-connects-realtime/issues
+[k2lib]: https://github.com/ldebruijn/elro-connects-k2-protocol

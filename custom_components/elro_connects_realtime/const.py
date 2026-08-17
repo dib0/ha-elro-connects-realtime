@@ -7,11 +7,22 @@ CONF_HOST = "host"
 CONF_DEVICE_ID = "device_id"
 CONF_CTRL_KEY = "ctrl_key"
 CONF_APP_ID = "app_id"
+CONF_PROTOCOL = "protocol"
 
 # Default values
 DEFAULT_PORT = 1025
 DEFAULT_CTRL_KEY = "0"
 DEFAULT_APP_ID = "0"
+
+# Protocol selection. AUTO is resolved to K1 or K2 by detect.py and the result
+# is stored in the config entry, so detection only runs once per hub.
+PROTOCOL_AUTO = "auto"
+PROTOCOL_K1 = "K1"
+PROTOCOL_K2 = "K2"
+
+# The K2 ignores APP_SEND commands until it has received a targeted IOT_KEY?
+# from the controlling host, so the session needs re-activating periodically.
+K2_KEEPALIVE_SECONDS = 60
 
 
 # ELRO Connects command constants (from original code)

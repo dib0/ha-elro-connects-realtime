@@ -1,4 +1,8 @@
-"""ELRO Connects Hub communication with K1/K2 protocol support and enhanced reliability."""
+"""ELRO Connects K1 hub communication with enhanced reliability.
+
+K2 hubs are handled by :mod:`.k2_hub`, which wraps the
+``elro-connects-k2-protocol`` library.
+"""
 
 from __future__ import annotations
 
@@ -19,17 +23,17 @@ from .const import (
     DEVICE_STATE_NORMAL,
     DEVICE_STATE_OPEN,
     DEVICE_STATE_UNKNOWN,
+    PROTOCOL_K1,
     ElroCommands,
     ElroDeviceTypes,
 )
 from .device import ElroDevice
-from .k2_codec import K2Codec
 
 _LOGGER = logging.getLogger(__name__)
 
 
 class ElroConnectsHub:
-    """Class to communicate with ELRO Connects hub with K1/K2 support."""
+    """Class to communicate with an ELRO Connects K1 hub."""
 
     def __init__(
         self,
@@ -39,7 +43,6 @@ class ElroConnectsHub:
         ctrl_key: str = "0",
         app_id: str = "0",
         port: int = DEFAULT_PORT,
-        force_protocol: str | None = None,
     ) -> None:
         """Initialize the hub."""
         self._host = host
@@ -48,7 +51,6 @@ class ElroConnectsHub:
         self._ctrl_key = ctrl_key
         self._app_id = app_id
         self._hass = hass
-        self._force_protocol = force_protocol
 
         self._socket: socket.socket | None = None
         self._socket_lock = threading.Lock()  # Protect socket access
@@ -65,18 +67,6 @@ class ElroConnectsHub:
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
         self._reloading = False  # Track if we're in reload mode
 
-        # Protocol detection
-        self._detected_protocol: str | None = None
-        self._use_k2 = False
-
-        # Auto-detect protocol unless forced
-        if force_protocol and force_protocol.upper() in ["K1", "K2"]:
-            self._detected_protocol = force_protocol.upper()
-            self._use_k2 = force_protocol.upper() == "K2"
-            _LOGGER.info("Forced protocol: %s", self._detected_protocol)
-        else:
-            _LOGGER.info("Protocol will be auto-detected from hub responses")
-
     @property
     def devices(self) -> dict[int, ElroDevice]:
         """Return all devices."""
@@ -85,11 +75,7 @@ class ElroConnectsHub:
     @property
     def protocol(self) -> str:
         """Return current protocol."""
-        if self._force_protocol:
-            return self._force_protocol.upper()
-        if self._detected_protocol:
-            return self._detected_protocol
-        return "UNKNOWN"
+        return PROTOCOL_K1
 
     def add_device_update_callback(
         self, callback: Callable[[ElroDevice], None]
@@ -163,19 +149,6 @@ class ElroConnectsHub:
         # Create new UDP socket
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-
-        # CRITICAL: K2 hub responds to port 39555 regardless of source port!
-        # Bind to 39555 so we receive K2 hub responses
-        try:
-            self._socket.bind(("", 39555))
-            _LOGGER.info("Socket bound to port 39555 for K2 hub compatibility")
-        except OSError as ex:
-            _LOGGER.warning(
-                "Could not bind to port 39555: %s. K2 hub may not work correctly.", ex
-            )
-            # Try any available port as fallback
-            self._socket.bind(("", 0))
-
         self._socket.setblocking(False)
 
         # Get the socket's local address
@@ -320,22 +293,13 @@ class ElroConnectsHub:
             raise
 
     async def _async_send_data(self, data: str) -> None:
-        """Send data to the hub using appropriate protocol (K1 or K2)."""
+        """Send data to the hub as plain JSON."""
         if not self._socket:
             raise RuntimeError("Socket not initialized")
 
         try:
-            # Both K1 and K2 accept plain JSON
-            # K2 hub accepts plain JSON in APP_SEND format
-            # K2 hub RESPONDS with encrypted binary (which we decrypt on receive)
             encoded_data = data.encode("utf-8")
-
-            protocol = "K2" if self._use_k2 else "K1"
-            _LOGGER.debug(
-                "Sending %s message: %s...",
-                protocol,
-                data[:100],
-            )
+            _LOGGER.debug("Sending K1 message: %s...", data[:100])
 
             await self._hass.async_add_executor_job(self._send_data_sync, encoded_data)
 
@@ -370,7 +334,7 @@ class ElroConnectsHub:
             self._socket.setblocking(False)
 
     async def _async_receive_data(self) -> None:
-        """Receive data from the hub with K1/K2 auto-detection."""
+        """Receive data from the hub."""
         consecutive_errors = 0
         receive_attempts = 0
 
@@ -401,96 +365,31 @@ class ElroConnectsHub:
                 self._last_data_received = datetime.now()
                 self._connection_issues = 0
 
-                # Try to decode as plain JSON first (both K1 and K2 send JSON responses)
+                # The K1 hub answers in plain UTF-8 JSON
                 try:
                     reply = data.decode("utf-8").strip()
                     _LOGGER.debug("Received message from %s: %s", addr, reply[:100])
 
-                    # Parse JSON
-                    if reply.startswith("{"):
+                    if reply == "{ST_answer_OK}":
+                        _LOGGER.debug("Received connection acknowledgment")
+                    elif reply.startswith("{"):
                         msg = json.loads(reply)
 
-                        # Detect protocol by message structure
-                        if (
-                            "action" in msg
-                            and "msg" in msg
-                            and "CMD_CODE" in msg.get("msg", {})
-                        ):
-                            # K2 structure detected
-                            # Check if this is NODE_ACK (initial handshake response)
-                            if msg.get("action") == "NODE_ACK":
-                                # NODE_ACK from primary hub - this hub speaks K2
-                                if (
-                                    not self._detected_protocol
-                                    and not self._force_protocol
-                                ):
-                                    if addr[0] == self._host:
-                                        # Response from target hub = pure K2 hub
-                                        self._detected_protocol = "K2"
-                                        self._use_k2 = True
-                                        _LOGGER.info(
-                                            "🔍 Pure K2 hub detected at %s", addr[0]
-                                        )
-                                    else:
-                                        # Response from different IP = mixed protocol
-                                        self._detected_protocol = "K1 (mixed)"
-                                        _LOGGER.info(
-                                            "🔍 Mixed protocol: K2 hub at %s, K1 devices from %s",
-                                            self._host,
-                                            addr[0],
-                                        )
-
-                            await self._async_handle_message(msg)
-                            # Send ACK for all K2 JSON messages (test script does this)
-                            ack_msg = {"action": "APP_ACK"}
-                            ack_data = K2Codec.encode_k2_message(ack_msg)
-                            _LOGGER.debug(
-                                "Sending encrypted APP_ACK for K2 JSON (%s)",
-                                msg.get("action"),
-                            )
-                            await self._hass.async_add_executor_job(
-                                self._send_data_sync, ack_data
-                            )
-                            _LOGGER.debug("APP_ACK sent")
-
-                        elif "params" in msg and "data" in msg["params"]:
-                            # K1 structure
-                            if not self._detected_protocol and not self._force_protocol:
-                                self._detected_protocol = "K1"
-                                self._use_k2 = False
-                                _LOGGER.info("🔍 Protocol auto-detected: K1")
-
+                        if "params" in msg and "data" in msg["params"]:
                             await self._async_handle_message(msg)
                             await self._async_send_data_raw("APP_answer_OK")
-
-                        elif reply == "{ST_answer_OK}":
-                            _LOGGER.debug("Received connection acknowledgment")
                         else:
                             await self._async_handle_message(msg)
-
                     else:
                         _LOGGER.debug("Received non-JSON message: %s", reply)
 
                 except (UnicodeDecodeError, json.JSONDecodeError) as ex:
-                    # Binary data - try K2 decoding
-                    _LOGGER.debug(
-                        "JSON decode failed (%s), trying K2 binary decode...",
+                    _LOGGER.warning(
+                        "Failed to decode K1 message (%s, %d bytes): %s",
                         type(ex).__name__,
+                        len(data),
+                        data.hex()[:60],
                     )
-                    decoded_json = K2Codec.decode_k2_message(data)
-                    if decoded_json:
-                        _LOGGER.debug(
-                            "Decoded K2 binary message: %s", str(decoded_json)[:100]
-                        )
-                        await self._async_handle_message(decoded_json)
-                        # Test script does NOT send ACK for binary messages!
-                        _LOGGER.debug("K2 binary message handled (no ACK sent)")
-                    else:
-                        _LOGGER.warning(
-                            "Failed to decode message (%d bytes): %s",
-                            len(data),
-                            data.hex()[:60],
-                        )
 
             except OSError as ex:
                 if ex.errno == 11:
@@ -535,194 +434,20 @@ class ElroConnectsHub:
             self._socket.setblocking(False)
 
     async def _async_handle_message(self, msg: dict[str, Any]) -> None:
-        """Handle received message (K1 or K2 format)."""
-        # K1 format: {"params": {"data": {...}}}
-        # K2 format: {"action": "NODE_SEND", "devID": "...", "msg": {...}}
-
-        # Try K1 format first
-        if "params" in msg and "data" in msg["params"]:
-            data = msg["params"]["data"]
-            cmd_id = data.get("cmdId")
-            _LOGGER.debug("Handling K1 message with cmdId: %s", cmd_id)
-
-            if cmd_id == ElroCommands.DEVICE_STATUS_UPDATE:
-                await self._async_handle_device_status_update(data)
-            elif cmd_id == ElroCommands.DEVICE_ALARM_TRIGGER:
-                await self._async_handle_device_alarm_trigger(data)
-            elif cmd_id == ElroCommands.DEVICE_NAME_REPLY:
-                await self._async_handle_device_name_reply(data)
-
-        # Try K2 format
-        elif "action" in msg and "msg" in msg:
-            action = msg.get("action")
-            inner_msg = msg.get("msg", {})
-            cmd_code = inner_msg.get("CMD_CODE")
-
-            _LOGGER.debug(
-                "Handling K2 message with action: %s, CMD_CODE: %s", action, cmd_code
-            )
-
-            # Map K2 command codes to handlers
-            if action in ["NODE_SEND", "APP_SEND"]:
-                _LOGGER.debug("K2 message content: %s", inner_msg)
-                if cmd_code == 17:  # UPLOAD_DEVICE_NAME
-                    await self._async_handle_k2_device_name(inner_msg)
-                elif cmd_code == 19:  # UPLOAD_DEVICE_STATUS
-                    _LOGGER.debug("Calling K2 device status handler (CMD 19)")
-                    await self._async_handle_k2_device_status(inner_msg)
-                elif cmd_code == 55:  # Alternative status format
-                    _LOGGER.debug("Calling K2 device status handler (CMD 55)")
-                    await self._async_handle_k2_device_status(inner_msg)
-                else:
-                    _LOGGER.debug("Unhandled K2 CMD_CODE: %s", cmd_code)
-
-    async def _async_handle_k2_device_name(self, msg: dict[str, Any]) -> None:
-        """Handle K2 device name message."""
-        rev_str1 = msg.get("rev_str1", "") or msg.get("data_str1", "")
-        rev_str2 = msg.get("rev_str2", "") or msg.get("data_str2", "")
-
-        if not rev_str1 or not rev_str2:
+        """Handle a received K1 message: {"params": {"data": {...}}}."""
+        if "params" not in msg or "data" not in msg["params"]:
             return
 
-        try:
-            if len(rev_str1) >= 4:
-                device_id = int(rev_str1[:4], 16)
-                if len(rev_str2) >= 32:
-                    name = self._hex_to_string(rev_str2[:32])
-                    if name:
-                        device = self._get_or_create_device(device_id)
-                        device.name = name
-                        device.last_seen = datetime.now()
-                        _LOGGER.info("K2: Device %d name: %s", device_id, name)
-                        await self._async_notify_device_update(device)
-        except ValueError as ex:
-            _LOGGER.debug("Could not parse K2 device name: %s", ex)
+        data = msg["params"]["data"]
+        cmd_id = data.get("cmdId")
+        _LOGGER.debug("Handling K1 message with cmdId: %s", cmd_id)
 
-    async def _async_handle_k2_device_status(self, msg: dict[str, Any]) -> None:
-        """Handle K2 device status message."""
-        cmd_code = msg.get("CMD_CODE")
-        data_str1 = msg.get("rev_str1") or msg.get("data_str1", "")
-        data_str2 = msg.get("rev_str2") or msg.get("data_str2", "")
-
-        _LOGGER.debug(
-            "K2 status (CMD %s): data_str1='%s', data_str2='%s'",
-            cmd_code,
-            data_str1,
-            data_str2,
-        )
-
-        if not data_str1:
-            _LOGGER.debug("K2 status missing data_str1")
-            return
-
-        try:
-            # CMD_CODE 55: Combined format - all data in data_str1, empty data_str2
-            if cmd_code == 55 and not data_str2 and len(data_str1) >= 14:
-                # Format: DDTTPPPPBBSS (14 chars)
-                # Example: 0100034064AA00
-                #   01 = device ID
-                #   00 = padding
-                #   03 = padding
-                #   4064 = device type
-                #   AA = battery (170 decimal)
-                #   00 = state
-
-                device_id = int(data_str1[:2], 16)
-                device = self._get_or_create_device(device_id)
-
-                # Type at chars 6-9
-                device.device_type = data_str1[6:10]
-
-                # Battery at chars 10-11
-                device.battery_level = int(data_str1[10:12], 16)
-
-                # State at chars 12-13
-                status_code = data_str1[12:14]
-                if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-                    device.state = (
-                        DEVICE_STATE_CLOSED
-                        if status_code in ["AA", "00"]
-                        else DEVICE_STATE_OPEN
-                    )
-                else:
-                    device.state = (
-                        DEVICE_STATE_ALARM
-                        if status_code == "BB"
-                        else (
-                            DEVICE_STATE_NORMAL
-                            if status_code in ["AA", "00"]
-                            else DEVICE_STATE_UNKNOWN
-                        )
-                    )
-
-                device.last_seen = datetime.now()
-                _LOGGER.info(
-                    "K2 (CMD 55): Device %d: type=%s, battery=%d%%, state=%s",
-                    device_id,
-                    device.device_type,
-                    device.battery_level,
-                    device.state,
-                )
-                await self._async_notify_device_update(device)
-                return
-
-            # Standard format: data_str1=device_id (4 chars), data_str2=type+battery+state
-            if data_str2 and len(data_str1) >= 4:
-                device_id = int(data_str1[:4], 16)
-                device = self._get_or_create_device(device_id)
-
-                if len(data_str2) >= 4:
-                    device.device_type = data_str2[:4]
-                if len(data_str2) >= 6:
-                    device.battery_level = int(data_str2[4:6], 16)
-                if len(data_str2) >= 8:
-                    status_code = data_str2[6:8]
-                    if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-                        device.state = (
-                            DEVICE_STATE_CLOSED
-                            if status_code == "AA"
-                            else DEVICE_STATE_OPEN
-                        )
-                    else:
-                        device.state = (
-                            DEVICE_STATE_ALARM
-                            if status_code == "BB"
-                            else (
-                                DEVICE_STATE_NORMAL
-                                if status_code == "AA"
-                                else DEVICE_STATE_UNKNOWN
-                            )
-                        )
-
-                device.last_seen = datetime.now()
-                _LOGGER.info(
-                    "K2 (CMD %s): Device %d: type=%s, battery=%d%%, state=%s",
-                    cmd_code,
-                    device_id,
-                    device.device_type,
-                    device.battery_level,
-                    device.state,
-                )
-                await self._async_notify_device_update(device)
-
-            # Fallback: Just create device so it exists
-            elif not data_str2 and len(data_str1) >= 4:
-                device_id = int(data_str1[:4], 16)
-                device = self._get_or_create_device(device_id)
-                device.last_seen = datetime.now()
-                _LOGGER.info(
-                    "K2 (CMD %s): Device %d seen (incomplete data)", cmd_code, device_id
-                )
-                await self._async_notify_device_update(device)
-
-        except (ValueError, IndexError) as ex:
-            _LOGGER.error(
-                "K2 parse error (CMD %s): %s (data_str1=%s, data_str2=%s)",
-                cmd_code,
-                ex,
-                data_str1,
-                data_str2,
-            )
+        if cmd_id == ElroCommands.DEVICE_STATUS_UPDATE:
+            await self._async_handle_device_status_update(data)
+        elif cmd_id == ElroCommands.DEVICE_ALARM_TRIGGER:
+            await self._async_handle_device_alarm_trigger(data)
+        elif cmd_id == ElroCommands.DEVICE_NAME_REPLY:
+            await self._async_handle_device_name_reply(data)
 
     async def _async_handle_device_status_update(self, data: dict[str, Any]) -> None:
         """Handle K1 device status update."""
@@ -844,72 +569,21 @@ class ElroConnectsHub:
                 _LOGGER.error("Error in device update callback: %s", ex)
 
     def _construct_message(self, data: str) -> str:
-        """Construct message with proper format (K1 or K2 compatible)."""
+        """Construct a K1 message envelope around a command payload."""
         self._msg_id += 1
 
-        if self._use_k2:
-            # K2 format: Plain JSON with K2 structure (NOT encrypted)
-            try:
-                data_obj = json.loads(data)
-
-                # Map K1 cmdId to K2 CMD_CODE
-                cmd_code_map = {
-                    ElroCommands.GET_ALL_EQUIPMENT_STATUS: 54,
-                    ElroCommands.SYN_DEVICE_STATUS: 29,
-                    ElroCommands.GET_DEVICE_NAME: 24,
-                    ElroCommands.EQUIPMENT_CONTROL: 1,
-                }
-
-                cmd_id = data_obj.get("cmdId")
-                cmd_code = cmd_code_map.get(cmd_id, cmd_id)
-
-                # Map K1 fields to K2 rev_str fields
-                rev_str1 = ""
-                rev_str2 = ""
-
-                # For device name command, map device_ID to rev_str1
-                if cmd_id == ElroCommands.GET_DEVICE_NAME:
-                    device_id = data_obj.get("device_ID", 0)
-                    rev_str1 = str(device_id)
-
-                # For device status commands, map device_status to rev_str2
-                elif cmd_id in [
-                    ElroCommands.GET_ALL_EQUIPMENT_STATUS,
-                    ElroCommands.SYN_DEVICE_STATUS,
-                ]:
-                    rev_str2 = data_obj.get("device_status", "")
-
-                message = {
-                    "action": "APP_SEND",
-                    "devID": self._device_id,
-                    "msg": {
-                        "msg_ID": self._msg_id,
-                        "CMD_CODE": cmd_code,
-                        "rev_str1": rev_str1,
-                        "rev_str2": rev_str2,
-                        "rev_str3": "",
-                    },
-                }
-
-                return json.dumps(message, separators=(",", ":"))
-
-            except Exception as ex:
-                _LOGGER.error("Failed to construct K2 message: %s", ex)
-                raise
-        else:
-            # K1 format (original)
-            return json.dumps(
-                {
-                    "msgId": self._msg_id,
-                    "action": "appSend",
-                    "params": {
-                        "devTid": self._device_id,
-                        "ctrlKey": self._ctrl_key,
-                        "appTid": self._app_id,
-                        "data": json.loads(data),
-                    },
-                }
-            )
+        return json.dumps(
+            {
+                "msgId": self._msg_id,
+                "action": "appSend",
+                "params": {
+                    "devTid": self._device_id,
+                    "ctrlKey": self._ctrl_key,
+                    "appTid": self._app_id,
+                    "data": json.loads(data),
+                },
+            }
+        )
 
     async def async_sync_device_status(self) -> None:
         """Sync device status."""
@@ -921,7 +595,6 @@ class ElroConnectsHub:
 
     async def async_sync_devices(self) -> None:
         """Get all device status."""
-        # Use K1 command - will be mapped to K2 if needed
         data = json.dumps(
             {"cmdId": ElroCommands.GET_ALL_EQUIPMENT_STATUS, "device_status": ""}
         )
@@ -930,7 +603,6 @@ class ElroConnectsHub:
 
     async def async_get_device_names(self) -> None:
         """Get device names."""
-        # Use K1 command - will be mapped to K2 if needed
         data = json.dumps({"cmdId": ElroCommands.GET_DEVICE_NAME, "device_ID": 0})
         msg = self._construct_message(data)
         await self._async_send_data(msg)
