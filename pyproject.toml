@@ -43,9 +43,16 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 
+# Home Assistant and voluptuous are only present in a Home Assistant
+# environment, and voluptuous ships no type information in the versions HA pins.
+# ignore_missing_imports covers both "not installed" (import-not-found) and
+# "installed without py.typed" (import-untyped), so the same config works
+# whether or not the lint environment has them - an inline "type: ignore" on the
+# import cannot, because it turns into an unused-ignore error in the other case.
 [[tool.mypy.overrides]]
 module = [
     "homeassistant.*",
+    "voluptuous.*",
 ]
 ignore_missing_imports = true
 

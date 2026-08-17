@@ -7,7 +7,7 @@ import logging
 from datetime import timedelta
 
 import homeassistant.helpers.config_validation as cv
-import voluptuous as vol  # type: ignore[import-not-found]
+import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
