@@ -8,10 +8,11 @@
 
 A custom Home Assistant integration for ELRO Connects K1 and K2 security devices with **real-time event processing**. This integration provides direct communication with your ELRO Connects hub (K1 and K2), offering instant alarm notifications and device state changes.
 
-K2 hubs (SF50GA) are handled by the [elro-connects-k2-protocol][k2lib] library by
-[@ldebruijn](https://github.com/ldebruijn), which does all K2 wire work: XOR framing,
-command routing, status decoding and the device profile registry. K1 hubs keep using this
-integration's own plain-text UDP implementation.
+K2 hubs (SF50GA) are handled by [elro-connects-k2-protocol][k2lib], the library by
+[@ldebruijn][ldebruijn] that does all K2 wire work: XOR framing, command routing, status
+decoding and the device profile registry. K1 hubs keep using this integration's own
+plain-text UDP implementation. If you only have K2 hardware, also have a look at
+[elro-connects-k2-ha][k2ha] - the integration written around that same library.
 
 ## ✨ Key Features
 
@@ -368,10 +369,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Acknowledgments
 
-- **[@ldebruijn](https://github.com/ldebruijn)** for working out the K2 protocol and
-  publishing it as a library, which this integration uses for all K2 communication:
-  - [elro-connects-k2-protocol][k2lib] - K2 local UDP protocol library
-  - [elro-connects-k2-ha](https://github.com/ldebruijn/elro-connects-k2-ha) - his own K2 integration
+- **Many thanks to [@ldebruijn][ldebruijn]** for reverse engineering the K2 protocol,
+  documenting it and publishing it as a reusable library. All K2 communication in this
+  integration runs on that work, and the K2 support here would not exist without it:
+  - [elro-connects-k2-protocol][k2lib] - the local K2 (SF50GA) UDP protocol library this
+    integration depends on, including its
+    [protocol reference](https://github.com/ldebruijn/elro-connects-k2-protocol/blob/main/docs/protocol_reference.md)
+    and [research notes](https://github.com/ldebruijn/elro-connects-k2-protocol/blob/main/docs/research.md)
+  - [elro-connects-k2-ha][k2ha] - a K2-only Home Assistant integration built on the same
+    library, and the reference implementation the K2 code here was modelled on
 - **[@jbouw](https://github.com/jbouw)** for the excellent foundation work:
   - [ha-elro-connects](https://github.com/jbouwh/ha-elro-connects) - Original Home Assistant integration
   - [lib-elro-connects](https://github.com/jbouwh/lib-elro-connects) - Core ELRO Connects library
@@ -399,3 +405,5 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 [hacsbadge]: https://img.shields.io/badge/HACS-Default-orange.svg?style=for-the-badge
 [issues]: https://github.com/dib0/ha-elro-connects-realtime/issues
 [k2lib]: https://github.com/ldebruijn/elro-connects-k2-protocol
+[k2ha]: https://github.com/ldebruijn/elro-connects-k2-ha
+[ldebruijn]: https://github.com/ldebruijn
