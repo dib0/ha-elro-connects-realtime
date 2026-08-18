@@ -138,6 +138,9 @@ After setup, you'll see entities for each of your ELRO Connects devices:
 #### Sensors
 - **Battery Levels**: Show as `sensor.device_name_battery`
   - Value: Battery percentage (0-100%)
+  - Every K2 sub-device gets one. Mains-powered devices without backup cells
+    (smart sockets, lighting modules, the outdoor siren) report `unknown`
+    instead of a misleading 0%.
 - **K2 only** — signal strength (`sensor.device_name_signal`, 1-4 bars, disabled by
   default) plus any measurements the device reports, such as
   `sensor.device_name_co2`, `sensor.device_name_temperature` and
@@ -169,6 +172,21 @@ Refresh device names from the hub.
 ```yaml
 service: elro_connects_realtime.get_device_names
 ```
+
+#### `elro_connects_realtime.remove_stale_devices`
+Delete devices and entities the hub no longer reports — for example the K1
+sub-devices left behind after switching a hub over to the K2 protocol. Devices
+the hub currently reports are never touched, so run it while the hub is online
+and after a successful sync.
+
+```yaml
+service: elro_connects_realtime.remove_stale_devices
+```
+
+Individual devices can also be deleted from their device page in
+**Settings → Devices & services → ELRO Connects Real-time**. The **Delete**
+button is refused for devices the hub still reports, since those would reappear
+on the next update.
 
 ### Automation Examples
 

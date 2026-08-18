@@ -51,6 +51,15 @@ _CAPABILITY_DEVICE_CLASSES: dict[str, BinarySensorDeviceClass] = {
 _CREATED_ENTITIES: set[str] = set()
 
 
+def created_binary_sensor_unique_ids() -> set[str]:
+    """Return the unique IDs of the binary sensors this platform has created.
+
+    Used by the stale-device cleanup service to tell a leftover registry entry
+    from one that is still being served.
+    """
+    return set(_CREATED_ENTITIES)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,

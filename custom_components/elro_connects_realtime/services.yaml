@@ -31,3 +31,10 @@ get_device_names:
       selector:
         device:
           integration: elro_connects_realtime
+
+remove_stale_devices:
+  name: Remove Stale Devices
+  description: >-
+    Delete devices and entities that the ELRO Connects hub no longer reports,
+    such as sub-devices left behind after switching a hub from K1 to K2.
+    Devices the hub currently reports are never touched.

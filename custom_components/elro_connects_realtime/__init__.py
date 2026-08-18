@@ -13,6 +13,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -50,6 +51,36 @@ SERVICE_TEST_ALARM_SCHEMA = vol.Schema(
 
 SERVICE_SYNC_DEVICES_SCHEMA = vol.Schema({})
 SERVICE_GET_DEVICE_NAMES_SCHEMA = vol.Schema({})
+SERVICE_REMOVE_STALE_DEVICES_SCHEMA = vol.Schema({})
+
+SERVICES = ("test_alarm", "sync_devices", "get_device_names", "remove_stale_devices")
+
+# Prefix of ElroDevice.unique_id, which is both the device registry identifier
+# of a sub-device and the leading part of every entity unique ID.
+SUBDEVICE_PREFIX = "elro_realtime_"
+
+
+def _subdevice_id_from_identifiers(device_entry: dr.DeviceEntry) -> int | None:
+    """Return the ELRO sub-device ID of a registry device, or None for the hub."""
+    for domain, identifier in device_entry.identifiers:
+        if domain != DOMAIN or not identifier.startswith(SUBDEVICE_PREFIX):
+            continue
+        try:
+            return int(identifier[len(SUBDEVICE_PREFIX) :])
+        except ValueError:
+            return None
+    return None
+
+
+def _subdevice_id_from_unique_id(unique_id: str) -> int | None:
+    """Return the ELRO sub-device ID an entity unique ID belongs to."""
+    if not unique_id.startswith(SUBDEVICE_PREFIX):
+        return None
+    head = unique_id[len(SUBDEVICE_PREFIX) :].split("_", 1)[0]
+    try:
+        return int(head)
+    except ValueError:
+        return None
 
 
 async def _async_resolve_protocol(hass: HomeAssistant, entry: ConfigEntry) -> str:
@@ -185,6 +216,79 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             hub = entry_data["hub"]
             await hub.async_get_device_names()
 
+    async def async_remove_stale_devices(call: ServiceCall) -> None:
+        """Delete registry devices and entities the hub no longer reports.
+
+        Pairing a K1 hub and then a K2 hub against the same config entry leaves
+        the old sub-devices behind: nothing removes a device registry entry when
+        it simply stops being reported. This prunes every device whose ID the
+        hub does not currently know, plus entities left over from the K1 entity
+        layout on devices that do still exist (a K1 "alarm" entity next to the
+        K2 per-hazard ones, for instance).
+        """
+        # Imported here so setting up the integration does not pull in the
+        # entity platform modules before Home Assistant asks for them.
+        from .binary_sensor import created_binary_sensor_unique_ids
+        from .sensor import created_sensor_unique_ids
+
+        device_registry = dr.async_get(hass)
+        entity_registry = er.async_get(hass)
+        live_unique_ids = (
+            created_binary_sensor_unique_ids() | created_sensor_unique_ids()
+        )
+        removed_devices = 0
+        removed_entities = 0
+
+        for entry_id, entry_data in hass.data[DOMAIN].items():
+            hub = entry_data["hub"]
+            live_ids = set(hub.devices)
+
+            for device_entry in dr.async_entries_for_config_entry(
+                device_registry, entry_id
+            ):
+                sub_id = _subdevice_id_from_identifiers(device_entry)
+                # None is the hub device itself; removing it would orphan the
+                # rest, so it is always kept.
+                if sub_id is None or sub_id in live_ids:
+                    continue
+                _LOGGER.info(
+                    "Removing stale ELRO device %s (sub-device %d)",
+                    device_entry.name_by_user or device_entry.name,
+                    sub_id,
+                )
+                # Unlinks the config entry and deletes the device once it is the
+                # last entry referencing it, so a device shared with a second
+                # hub entry survives.
+                device_registry.async_update_device(
+                    device_entry.id, remove_config_entry_id=entry_id
+                )
+                removed_devices += 1
+
+            for entity_entry in er.async_entries_for_config_entry(
+                entity_registry, entry_id
+            ):
+                if entity_entry.unique_id in live_unique_ids:
+                    continue
+                sub_id = _subdevice_id_from_unique_id(entity_entry.unique_id)
+                # Entities of a removed device went with it above.
+                if sub_id is None or sub_id not in live_ids:
+                    continue
+                # Only prune when this device does have current entities;
+                # otherwise a device that was missing from the last sync would
+                # lose all of them.
+                prefix = f"{SUBDEVICE_PREFIX}{sub_id}_"
+                if not any(uid.startswith(prefix) for uid in live_unique_ids):
+                    continue
+                _LOGGER.info("Removing stale ELRO entity %s", entity_entry.entity_id)
+                entity_registry.async_remove(entity_entry.entity_id)
+                removed_entities += 1
+
+        _LOGGER.info(
+            "Cleanup removed %d stale device(s) and %d stale entity(ies)",
+            removed_devices,
+            removed_entities,
+        )
+
     # Register services only if not already registered
     if not hass.services.has_service(DOMAIN, "test_alarm"):
         hass.services.async_register(
@@ -205,6 +309,14 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             "get_device_names",
             async_get_device_names,
             schema=SERVICE_GET_DEVICE_NAMES_SCHEMA,
+        )
+
+    if not hass.services.has_service(DOMAIN, "remove_stale_devices"):
+        hass.services.async_register(
+            DOMAIN,
+            "remove_stale_devices",
+            async_remove_stale_devices,
+            schema=SERVICE_REMOVE_STALE_DEVICES_SCHEMA,
         )
 
 
@@ -234,14 +346,35 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Remove services if this is the last entry
     if not hass.data[DOMAIN]:
         try:
-            hass.services.async_remove(DOMAIN, "test_alarm")
-            hass.services.async_remove(DOMAIN, "sync_devices")
-            hass.services.async_remove(DOMAIN, "get_device_names")
+            for service in SERVICES:
+                hass.services.async_remove(DOMAIN, service)
             _LOGGER.info("Removed ELRO Connects services")
         except Exception as ex:
             _LOGGER.error("Error removing services: %s", ex)
 
     return unload_ok
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Allow deleting a device from its Home Assistant device page.
+
+    Defining this is what makes the "Delete" button appear at all. A device the
+    hub still reports would come straight back on the next update, so only
+    leftovers are removable; the hub device itself never is.
+    """
+    sub_id = _subdevice_id_from_identifiers(device_entry)
+    if sub_id is None:
+        return False
+
+    entry_data = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+    if entry_data is None:
+        # Entry not loaded, so nothing can claim the device.
+        return True
+
+    hub: ElroHub = entry_data["hub"]
+    return sub_id not in hub.devices
 
 
 class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):

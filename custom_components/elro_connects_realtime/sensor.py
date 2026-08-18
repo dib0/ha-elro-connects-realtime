@@ -34,6 +34,15 @@ _CAPABILITY_DEVICE_CLASSES: dict[str, SensorDeviceClass] = {
 _CREATED_SENSOR_ENTITIES: set[str] = set()
 
 
+def created_sensor_unique_ids() -> set[str]:
+    """Return the unique IDs of the sensor entities this platform has created.
+
+    Used by the stale-device cleanup service to tell a leftover registry entry
+    from one that is still being served.
+    """
+    return set(_CREATED_SENSOR_ENTITIES)
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     config_entry: ConfigEntry,
@@ -93,8 +102,7 @@ def _create_sensors_for_device(
     # K2: battery and signal come from every device, measurements only from the
     # ones whose profile in the protocol library declares them.
     if device.protocol == PROTOCOL_K2:
-        if not device.mains_powered and device.battery_level >= 0:
-            entities.append(ElroConnectsBatterySensor(device, hub))
+        entities.append(ElroConnectsBatterySensor(device, hub))
         if device.signal_bars is not None:
             entities.append(ElroConnectsSignalSensor(device, hub))
         entities.extend(
@@ -199,16 +207,26 @@ class ElroConnectsBatterySensor(ElroConnectsSensor):
 
     @property
     def native_value(self) -> int | None:
-        """Return the battery level."""
-        if self._device.battery_level >= 0:
-            return self._device.battery_level
-        return None
+        """Return the battery level.
+
+        Every K2 sub-device reports a battery byte, including the mains-powered
+        profiles (sockets, lighting modules, sirens) that have no cells fitted
+        and send 0. Reporting that as 0 % would look like a flat battery, so it
+        is reported as unknown instead; a mains device with real backup cells —
+        the GS241A CO2 detector and the gas alarms have them — sends a genuine
+        percentage and is passed through.
+        """
+        if self._device.battery_level < 0:
+            return None
+        if self._device.mains_powered and self._device.battery_level == 0:
+            return None
+        return self._device.battery_level
 
     @property
     def icon(self) -> str:
         """Return the icon for the sensor."""
-        battery_level = self._device.battery_level
-        if battery_level < 0:
+        battery_level = self.native_value
+        if battery_level is None:
             return "mdi:battery-unknown"
         elif battery_level <= 10:
             return "mdi:battery-10"
