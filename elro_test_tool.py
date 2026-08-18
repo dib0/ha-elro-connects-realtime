@@ -58,6 +58,12 @@ DEFAULT_APP_ID = "0"
 PROTOCOL_K1 = "K1"
 PROTOCOL_K2 = "K2"
 
+# CMD_CODEs elro-connects-k2-protocol routes itself. Anything else it decodes,
+# acknowledges and drops, so this tool reports those separately: a hub that
+# announces an alarm on a code the library does not know would otherwise look
+# like a hub that says nothing at all.
+LIBRARY_CMD_CODES = frozenset({11, 13, 17, 19, 55, 56, 62, 66})
+
 # Actions only a hub sends. Our own request loops back when the hub address is
 # this host, so "IOT_KEY?" must not be mistaken for an answer.
 _HUB_ACTIONS = frozenset({"NODE_ACK", "NODE_SEND", "APP_SEND"})
@@ -147,14 +153,22 @@ class K2TestTool:
         self.device_id = device_id
         self.gateway = K2Gateway(host, device_id)
         self.update_log: List[Dict[str, Any]] = []
+        self.frame_log: List[Dict[str, Any]] = []
         self.last_received = datetime.now()
         self.stats: Dict[str, Any] = {
             "push_updates": 0,
             "poll_updates": 0,
             "paired_updates": 0,
+            "frames_received": 0,
+            "frames_not_routed": 0,
             "max_silence_duration": timedelta(0),
         }
         self.logger = logging.getLogger("ElroTestTool")
+        # The library offers no raw-frame hook, and _on_message is resolved on
+        # the gateway instance for every datagram, so assigning over it here
+        # shadows the method for this instance and lets every frame be logged.
+        self._gateway_on_message = self.gateway._on_message
+        self.gateway._on_message = self._on_raw_frame  # type: ignore[method-assign]
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -165,6 +179,37 @@ class K2TestTool:
 
     async def close(self) -> None:
         await self.gateway.disconnect()
+
+    def _on_raw_frame(self, obj: Dict[str, Any], source_ip: str) -> None:
+        """Log every frame the hub sends, then hand it to the library."""
+        msg = obj.get("msg") if isinstance(obj, dict) else None
+        cmd_code = msg.get("CMD_CODE") if isinstance(msg, dict) else None
+        routed = cmd_code in LIBRARY_CMD_CODES
+
+        self.stats["frames_received"] += 1
+        self.frame_log.append(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "source_ip": source_ip,
+                "cmd_code": cmd_code,
+                "routed_by_library": routed,
+                "msg": msg,
+            }
+        )
+
+        if routed:
+            self.logger.debug("<- frame CMD_CODE=%s from %s", cmd_code, source_ip)
+        else:
+            # The interesting case: press the test button and watch for this.
+            self.stats["frames_not_routed"] += 1
+            self.logger.warning(
+                "<- frame CMD_CODE=%s from %s is NOT routed by the library: %s",
+                cmd_code,
+                source_ip,
+                msg,
+            )
+
+        self._gateway_on_message(obj, source_ip)
 
     def _on_update(self, sub_id: int, device: SubDevice, source: UpdateSource) -> None:
         now = datetime.now()
@@ -409,6 +454,8 @@ class K2TestTool:
         print(f"Push updates:        {self.stats['push_updates']}")
         print(f"Poll updates:        {self.stats['poll_updates']}")
         print(f"Pairing updates:     {self.stats['paired_updates']}")
+        print(f"Frames received:     {self.stats['frames_received']}")
+        print(f"Frames not routed:   {self.stats['frames_not_routed']}")
         print(f"Max silence:         {self.stats['max_silence_duration']}")
         print(f"{'='*70}\n")
 
@@ -449,6 +496,7 @@ class K2TestTool:
                             )
                         ],
                         "updates": self.update_log,
+                        "frames": self.frame_log,
                     },
                     handle,
                     indent=2,

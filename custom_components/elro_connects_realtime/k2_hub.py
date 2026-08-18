@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable, NamedTuple
 
 from elro_connects_k2_protocol.gateway import K2Gateway
 from elro_connects_k2_protocol.models import AlarmState, SubDevice, UpdateSource
@@ -48,6 +48,17 @@ _TRIGGERED_STATES = frozenset(
 # Same set as names, for the entity platforms which read ElroDevice.alarm_state.
 TRIGGERED_ALARM_STATES = frozenset(state.name for state in _TRIGGERED_STATES)
 
+# The hub announces a sounding detector with a frame of its own rather than a
+# status push, and that frame carries no CMD_CODE at all - only a deviceID (a
+# hub-internal number, not the sub-device) and this payload. The protocol
+# library dispatches on CMD_CODE, so it decodes the frame, acknowledges it and
+# then drops it; the wrapper below picks it out by field name instead.
+_ALARM_MESSAGE_FIELD = "alarmMessage"
+
+# CMD_CODEs the protocol library routes itself, so anything else can be logged
+# once instead of silently dropped.
+_LIBRARY_CMD_CODES = frozenset({11, 13, 17, 19, 55, 56, 62, 66})
+
 
 class ElroK2Hub:
     """Communicate with an ELRO Connects K2 hub through the protocol library."""
@@ -57,6 +68,12 @@ class ElroK2Hub:
         self._host = host
         self._device_id = device_id
         self._gateway = K2Gateway(host, device_id)
+        # The library dispatches only the CMD_CODEs in _LIBRARY_CMD_CODES, which
+        # leaves the alarm trigger unhandled, and it offers no raw-frame hook.
+        # _on_message is resolved on the gateway instance for every datagram, so
+        # assigning here shadows the method for this instance only.
+        self._gateway_on_message = self._gateway._on_message
+        self._gateway._on_message = self._on_gateway_message  # type: ignore[method-assign]
         self._devices: dict[int, ElroDevice] = {}
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
         self._running = False
@@ -236,6 +253,71 @@ class ElroK2Hub:
             except Exception as ex:
                 _LOGGER.error("Error in K2 keepalive: %s", ex)
 
+    def _on_gateway_message(self, obj: dict[str, Any], source_ip: str) -> None:
+        """See every decoded frame, then let the library handle it as usual.
+
+        The library is called first so its automatic ACK goes back to the hub
+        without waiting on anything here.
+        """
+        try:
+            self._gateway_on_message(obj, source_ip)
+        finally:
+            msg = obj.get("msg")
+            if not isinstance(msg, dict):
+                return
+            payload = msg.get(_ALARM_MESSAGE_FIELD)
+            if isinstance(payload, str):
+                self._handle_alarm_message(payload)
+                return
+            cmd_code = msg.get("CMD_CODE")
+            if cmd_code not in _LIBRARY_CMD_CODES:
+                _LOGGER.debug("K2 frame with unhandled CMD_CODE %s: %s", cmd_code, msg)
+
+    def _handle_alarm_message(self, payload: str) -> None:
+        """Apply an alarm notification to the device it names."""
+        notification = _decode_alarm_message(payload)
+        if notification is None:
+            _LOGGER.warning("K2 alarm frame payload not understood: %r", payload)
+            return
+
+        device = self._devices.get(notification.sub_id)
+        if device is None:
+            # Reported rather than guessed at: applying a misread ID to whatever
+            # device happens to hold it would raise a false alarm.
+            _LOGGER.warning(
+                "K2 alarm frame names unknown sub-device %d (known: %s); payload=%r",
+                notification.sub_id,
+                sorted(self._devices),
+                payload,
+            )
+            return
+
+        device.alarm_state = notification.alarm_state.name
+        device.battery_level = notification.battery_pct
+        device.signal_bars = notification.signal_bars
+        device.state = _map_state(
+            notification.alarm_state,
+            {capability.key for capability in device.capabilities},
+            device.valve_open,
+        )
+        device.last_seen = datetime.now()
+
+        if notification.alarm_state in _TRIGGERED_STATES:
+            _LOGGER.warning(
+                "ALARM! K2 device %d (%s) reports %s",
+                notification.sub_id,
+                device.name or "unknown",
+                notification.alarm_state.name,
+            )
+        else:
+            _LOGGER.info(
+                "K2 alarm frame for device %d (%s): %s",
+                notification.sub_id,
+                device.name or "unknown",
+                notification.alarm_state.name,
+            )
+        self._notify_device_update(device)
+
     def _handle_gateway_update(
         self, sub_id: int, sub_device: SubDevice, source: UpdateSource
     ) -> None:
@@ -267,7 +349,11 @@ class ElroK2Hub:
         device.signal_bars = sub_device.signal_bars
         device.alarm_state = sub_device.alarm_state.name
         device.raw_status = sub_device.raw_status
-        device.state = _map_state(sub_device)
+        device.state = _map_state(
+            sub_device.alarm_state,
+            {capability.key for capability in profile.capabilities},
+            sub_device.valve_open,
+        )
         device.co2_ppm = sub_device.co2_ppm
         device.temperature_c = sub_device.temperature_c
         device.humidity_pct = sub_device.humidity_pct
@@ -304,20 +390,82 @@ class ElroK2Hub:
                 _LOGGER.error("Error in device update callback: %s", ex)
 
 
-def _map_state(sub_device: SubDevice) -> str:
+class AlarmNotification(NamedTuple):
+    """The contents of a K2 ``alarmMessage`` payload."""
+
+    sub_id: int
+    raw_type: str
+    signal_bars: int
+    battery_pct: int
+    alarm_state: AlarmState
+
+
+def _decode_alarm_message(payload: str) -> AlarmNotification | None:
+    """Decode the ``alarmMessage`` payload of a K2 alarm notification.
+
+    Layout, all hex. Verified against a GS412 heat alarm on 2026-08-18 by
+    cross-checking every field against the same device's CMD_CODE 55 sync
+    record, which independently reported sub-device 1, type 0003, 4 signal bars
+    and 95 % battery::
+
+        [0:6]   header (purpose unknown; varies between frames)
+        [6:10]  sub-device ID
+        [10:14] raw device type
+        [14:16] signal bars
+        [16:18] battery byte (& 0x7F -> percentage)
+        [18:20] alarm state ("BB" alert, "55" alarm, "AA" clear, ...)
+        [20:22] sub-state (purpose unknown)
+        [22:28] trailer (purpose unknown)
+
+    This is deliberately not the library's 14-char sync record layout: there
+    signal and room share one byte as two nibbles, while here signal has a byte
+    to itself. Feeding the embedded slice to ``parse_status_record`` decodes
+    every other field correctly but reports the wrong signal strength.
+
+    Returns None if the payload is too short or not hex.
+    """
+    if len(payload) < 20:
+        return None
+
+    try:
+        sub_id = int(payload[6:10], 16)
+        signal_bars = int(payload[14:16], 16)
+        battery_pct = int(payload[16:18], 16) & 0x7F
+    except ValueError:
+        return None
+
+    if sub_id == 0:
+        return None
+
+    try:
+        alarm_state = AlarmState(payload[18:20].upper())
+    except ValueError:
+        alarm_state = AlarmState.UNKNOWN
+
+    return AlarmNotification(
+        sub_id=sub_id,
+        raw_type=payload[10:14],
+        signal_bars=signal_bars,
+        battery_pct=battery_pct,
+        alarm_state=alarm_state,
+    )
+
+
+def _map_state(
+    alarm_state: AlarmState, capability_keys: set[str], valve_open: bool | None
+) -> str:
     """Map a library ``AlarmState`` onto this integration's state strings."""
-    capability_keys = {c.key for c in sub_device.profile.capabilities}
-    triggered = sub_device.alarm_state in _TRIGGERED_STATES
+    triggered = alarm_state in _TRIGGERED_STATES
 
     if "door" in capability_keys:
         return DEVICE_STATE_OPEN if triggered else DEVICE_STATE_CLOSED
     if "valve" in capability_keys:
         # Thermostats repurpose the alarm byte, so read the decoded valve field.
-        return DEVICE_STATE_OPEN if sub_device.valve_open else DEVICE_STATE_CLOSED
+        return DEVICE_STATE_OPEN if valve_open else DEVICE_STATE_CLOSED
 
     if triggered:
         return DEVICE_STATE_ALARM
-    if sub_device.alarm_state in (AlarmState.CLEAR, AlarmState.SILENCED):
+    if alarm_state in (AlarmState.CLEAR, AlarmState.SILENCED):
         return DEVICE_STATE_NORMAL
     # FAULT and anything the library could not decode.
     return DEVICE_STATE_UNKNOWN

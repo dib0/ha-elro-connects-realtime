@@ -256,6 +256,29 @@ The K2 only answers requests that come from local UDP port 1025, so the integrat
 it. Nothing else on the Home Assistant host may hold that port — including a second copy of
 this integration or `elro_test_tool.py` running on the same machine.
 
+#### K2: an alarm does not reach Home Assistant
+
+The hub announces a sounding detector with a frame that carries no `CMD_CODE`
+at all — just a `deviceID` and an `alarmMessage` hex payload. Since
+`elro-connects-k2-protocol` dispatches on `CMD_CODE`, it decodes that frame,
+acknowledges it and drops it, so the integration picks it out by field name and
+decodes the payload itself (see `_decode_alarm_message` in `k2_hub.py`).
+
+Press the test button; the log should show `ALARM! K2 device <id> reports ALERT`.
+If it instead shows `K2 alarm frame payload not understood` or
+`names unknown sub-device`, that line carries the raw payload — please open an
+issue with it. The detector usually reports itself clear again a second later, so
+expect a brief pulse rather than a sustained `on` state.
+
+To see every frame the hub sends, including the ones the library drops:
+
+```bash
+python3 elro_test_tool.py --host <hub-ip> --device-id <ST_...> --monitor 120 -v
+```
+
+Frames the library does not route are logged as warnings with their full
+payload, and counted as `Frames not routed` in the closing statistics.
+
 #### Connection Failed
 - Verify the hub IP address is correct
 - Ensure the hub is powered on and connected to your network
