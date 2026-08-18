@@ -168,7 +168,9 @@ class K2TestTool:
         # the gateway instance for every datagram, so assigning over it here
         # shadows the method for this instance and lets every frame be logged.
         self._gateway_on_message = self.gateway._on_message
-        self.gateway._on_message = self._on_raw_frame  # type: ignore[method-assign]
+        # setattr rather than a plain assignment; see the same call in
+        # k2_hub.py for why an inline type: ignore cannot work here.
+        setattr(self.gateway, "_on_message", self._on_raw_frame)
 
     # -- lifecycle ---------------------------------------------------------
 

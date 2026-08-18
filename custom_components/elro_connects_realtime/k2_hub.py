@@ -73,7 +73,12 @@ class ElroK2Hub:
         # _on_message is resolved on the gateway instance for every datagram, so
         # assigning here shadows the method for this instance only.
         self._gateway_on_message = self._gateway._on_message
-        self._gateway._on_message = self._on_gateway_message  # type: ignore[method-assign]
+        # setattr, not a plain assignment: mypy rejects assigning over a method,
+        # but only when it can resolve the library's types. An inline ignore
+        # would then become an unused-ignore error in a lint environment without
+        # the library installed, which is the same trap the mypy overrides in
+        # pyproject.toml document for imports.
+        setattr(self._gateway, "_on_message", self._on_gateway_message)
         self._devices: dict[int, ElroDevice] = {}
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
         self._running = False
