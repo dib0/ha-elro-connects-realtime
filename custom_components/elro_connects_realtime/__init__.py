@@ -222,6 +222,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Create coordinator for device updates
     coordinator = ElroConnectsCoordinator(hass, hub)
 
+    # DataUpdateCoordinator only schedules its next refresh while it has at
+    # least one listener, and these entities are not CoordinatorEntity
+    # subclasses: they update from the hub's own callbacks. Without a listener
+    # the coordinator polls exactly once, during the first refresh below, and
+    # never again. The K1 hub survives that because it polls itself in
+    # _async_heartbeat, but the K2 hub relies on this poll — its keepalive only
+    # re-activates the session — so every K2 device would stop being refreshed
+    # and go unavailable once ElroDevice.is_available's 5-minute window expired.
+    entry.async_on_unload(coordinator.async_add_listener(lambda: None))
+
     # Store hub and coordinator
     hass.data[DOMAIN][entry.entry_id] = {
         "hub": hub,

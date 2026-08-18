@@ -166,7 +166,18 @@ class ElroK2Hub:
             await self._gateway.activate()
             devices = await self._gateway.sync_devices()
 
-        _LOGGER.debug("K2 sync returned %d device(s)", len(devices))
+        if not devices:
+            # sync_devices() returns whatever it collected before its timeout,
+            # so a hub that never answered is an empty dict rather than an
+            # error. Left silent, every device just quietly goes stale.
+            _LOGGER.warning(
+                "K2 sync returned no devices; the hub at %s did not answer "
+                "CMD_CODE 54 (devices will go unavailable if this persists)",
+                self._host,
+            )
+        else:
+            _LOGGER.debug("K2 sync returned %d device(s)", len(devices))
+
         for sub_id, sub_device in devices.items():
             self._update_device(sub_id, sub_device)
 
