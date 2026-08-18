@@ -58,9 +58,15 @@ async def _async_resolve_protocol(hass: HomeAssistant, entry: ConfigEntry) -> st
     A detected result is written back to the config entry so the probe only runs
     once per hub; entries created before protocol selection existed land here too.
     """
-    configured = entry.data.get(CONF_PROTOCOL, PROTOCOL_AUTO)
+    # Entries written before the protocol values were lower-cased (for use as
+    # translation keys) hold "K1"/"K2", so normalise before comparing.
+    configured = str(entry.data.get(CONF_PROTOCOL, PROTOCOL_AUTO)).lower()
     if configured in (PROTOCOL_K1, PROTOCOL_K2):
-        return str(configured)
+        if configured != entry.data.get(CONF_PROTOCOL):
+            hass.config_entries.async_update_entry(
+                entry, data={**entry.data, CONF_PROTOCOL: configured}
+            )
+        return configured
 
     protocol = await async_detect_protocol(
         entry.data[CONF_HOST], entry.data[CONF_DEVICE_ID]
@@ -86,7 +92,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         },  # Changed: use device_id
         name=f"ELRO Connects Hub ({entry.data[CONF_DEVICE_ID]})",  # Changed: unique name
         manufacturer="ELRO",
-        model=f"Connects Real-time Hub ({protocol})",
+        model=f"Connects Real-time Hub ({protocol.upper()})",
         sw_version="1.0.0",
     )
     _LOGGER.info("Created hub device in device registry")

@@ -44,8 +44,8 @@
     "protocol": {
       "options": {
         "auto": "Auto-detect",
-        "K1": "K1",
-        "K2": "K2 (SF50GA)"
+        "k1": "K1",
+        "k2": "K2 (SF50GA)"
       }
     }
   }

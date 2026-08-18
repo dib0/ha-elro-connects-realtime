@@ -17,8 +17,8 @@ DEFAULT_APP_ID = "0"
 # Protocol selection. AUTO is resolved to K1 or K2 by detect.py and the result
 # is stored in the config entry, so detection only runs once per hub.
 PROTOCOL_AUTO = "auto"
-PROTOCOL_K1 = "K1"
-PROTOCOL_K2 = "K2"
+PROTOCOL_K1 = "k1"
+PROTOCOL_K2 = "k2"
 
 # The K2 ignores APP_SEND commands until it has received a targeted IOT_KEY?
 # from the controlling host, so the session needs re-activating periodically.
