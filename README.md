@@ -188,6 +188,12 @@ Individual devices can also be deleted from their device page in
 button is refused for devices the hub still reports, since those would reappear
 on the next update.
 
+> **Multiple hubs:** sub-device IDs restart at 1 on every hub, so entity unique
+> IDs and device identifiers now include the hub's device ID. Existing
+> registry entries are renamed in place on the next start — entity IDs, history
+> and customisations are kept. Where two hubs had collided on the same ID, one
+> hub's entry is left behind as a duplicate; `remove_stale_devices` clears it.
+
 ### Automation Examples
 
 #### Fire Alarm Notification

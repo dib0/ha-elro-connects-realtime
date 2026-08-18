@@ -83,6 +83,15 @@ DEVICE_STATE_ALARM = "alarm"
 DEVICE_STATE_OPEN = "open"
 DEVICE_STATE_CLOSED = "closed"
 
+# hass.data[DOMAIN][entry_id] key holding the unique IDs both entity platforms
+# have created for that entry.
+DATA_CREATED_UNIQUE_IDS = "created_unique_ids"
+
+# Leading part of every sub-device identifier: the device registry identifier of
+# a sub-device is f"{SUBDEVICE_PREFIX}{hub_device_id}_{sub_id}", and every entity
+# unique ID is that followed by "_{entity suffix}".
+SUBDEVICE_PREFIX = "elro_realtime_"
+
 # Attribute names
 ATTR_DEVICE_ID = "device_id"
 ATTR_DEVICE_TYPE = "device_type"

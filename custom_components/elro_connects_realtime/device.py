@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from .const import DEVICE_STATE_UNKNOWN, PROTOCOL_K1
+from .const import DEVICE_STATE_UNKNOWN, PROTOCOL_K1, SUBDEVICE_PREFIX
 
 if TYPE_CHECKING:
     from elro_connects_k2_protocol.models import DeviceCapability
@@ -48,8 +48,13 @@ class ElroDevice:
 
     @property
     def unique_id(self) -> str:
-        """Return unique ID for this device."""
-        return f"elro_realtime_{self.id}"
+        """Return unique ID for this device.
+
+        The hub's device ID is part of it because sub-device IDs are only unique
+        within one hub: they restart at 1 on every hub, so two configured hubs
+        would otherwise hand out the same identifier for unrelated devices.
+        """
+        return f"{SUBDEVICE_PREFIX}{self._hub_device_id}_{self.id}"
 
     @property
     def is_available(self) -> bool:

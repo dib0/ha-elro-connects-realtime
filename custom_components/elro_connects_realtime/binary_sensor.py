@@ -19,6 +19,7 @@ from .const import (
     ATTR_DEVICE_ID,
     ATTR_DEVICE_TYPE,
     ATTR_LAST_SEEN,
+    DATA_CREATED_UNIQUE_IDS,
     DEVICE_STATE_ALARM,
     DEVICE_STATE_OPEN,
     DOMAIN,
@@ -47,18 +48,6 @@ _CAPABILITY_DEVICE_CLASSES: dict[str, BinarySensorDeviceClass] = {
     "problem": BinarySensorDeviceClass.PROBLEM,
 }
 
-# Global registry to track created entities
-_CREATED_ENTITIES: set[str] = set()
-
-
-def created_binary_sensor_unique_ids() -> set[str]:
-    """Return the unique IDs of the binary sensors this platform has created.
-
-    Used by the stale-device cleanup service to tell a leftover registry entry
-    from one that is still being served.
-    """
-    return set(_CREATED_ENTITIES)
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -66,17 +55,21 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ELRO Connects binary sensor platform."""
-    hub: ElroHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
+    entry_data = hass.data[DOMAIN][config_entry.entry_id]
+    hub: ElroHub = entry_data["hub"]
+    # Shared with the sensor platform; see the note there on why this is per
+    # config entry rather than module state.
+    created: set[str] = entry_data[DATA_CREATED_UNIQUE_IDS]
 
     entities = []
 
     # Create binary sensors for existing devices
     for device in hub.devices.values():
-        new_entities = _create_binary_sensors_for_device(device, hub)
+        new_entities = _create_binary_sensors_for_device(device, hub, created)
         for entity in new_entities:
-            if entity.unique_id not in _CREATED_ENTITIES:
+            if entity.unique_id not in created:
                 entities.append(entity)
-                _CREATED_ENTITIES.add(entity.unique_id)
+                created.add(entity.unique_id)
             else:
                 _LOGGER.debug("Skipping duplicate entity: %s", entity.unique_id)
 
@@ -91,13 +84,13 @@ async def async_setup_entry(
         if not device.device_type:
             return
 
-        new_entities = _create_binary_sensors_for_device(device, hub)
+        new_entities = _create_binary_sensors_for_device(device, hub, created)
         entities_to_add = []
 
         for entity in new_entities:
-            if entity.unique_id not in _CREATED_ENTITIES:
+            if entity.unique_id not in created:
                 entities_to_add.append(entity)
-                _CREATED_ENTITIES.add(entity.unique_id)
+                created.add(entity.unique_id)
 
         if entities_to_add:
             async_add_entities(entities_to_add, True)
@@ -111,7 +104,7 @@ async def async_setup_entry(
 
 
 def _create_binary_sensors_for_device(
-    device: ElroDevice, hub: ElroHub
+    device: ElroDevice, hub: ElroHub, created: set[str]
 ) -> list[ElroConnectsBinarySensor]:
     """Create binary sensors for a device based on its type."""
     entities: list[ElroConnectsBinarySensor] = []
@@ -124,20 +117,20 @@ def _create_binary_sensors_for_device(
     # which hazards this device reports. No type-code branching needed.
     if device.protocol == PROTOCOL_K2:
         return [
-            ElroConnectsCapabilitySensor(device, hub, capability)
+            ElroConnectsCapabilitySensor(device, hub, created, capability)
             for capability in device.capabilities
             if capability.entity_type == "binary_sensor"
         ]
 
     if device.device_type == ElroDeviceTypes.DOOR_WINDOW_SENSOR:
-        entities.append(ElroConnectsDoorWindowSensor(device, hub))
+        entities.append(ElroConnectsDoorWindowSensor(device, hub, created))
     elif device.device_type in [
         ElroDeviceTypes.CO_ALARM,
         ElroDeviceTypes.WATER_ALARM,
         ElroDeviceTypes.HEAT_ALARM,
         ElroDeviceTypes.FIRE_ALARM,
     ]:
-        entities.append(ElroConnectsAlarmSensor(device, hub))
+        entities.append(ElroConnectsAlarmSensor(device, hub, created))
 
     return entities
 
@@ -145,10 +138,11 @@ def _create_binary_sensors_for_device(
 class ElroConnectsBinarySensor(BinarySensorEntity):
     """Base class for ELRO Connects binary sensors."""
 
-    def __init__(self, device: ElroDevice, hub: ElroHub) -> None:
+    def __init__(self, device: ElroDevice, hub: ElroHub, created: set[str]) -> None:
         """Initialize the binary sensor."""
         self._device = device
         self._hub = hub
+        self._created = created
         self._device_id = device.id
         self._attr_unique_id = f"{device.unique_id}_{self._sensor_type}"
         self._attr_device_info = device.device_info
@@ -203,9 +197,9 @@ class ElroConnectsBinarySensor(BinarySensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         """When entity is removed from hass."""
         self._hub.remove_device_update_callback(self._async_device_updated)
-        # Remove from tracking
-        if self.unique_id in _CREATED_ENTITIES:
-            _CREATED_ENTITIES.remove(self.unique_id)
+        # Untrack so the entity can be recreated if the device comes back.
+        if self.unique_id is not None:
+            self._created.discard(self.unique_id)
 
     def _async_device_updated(self, device: ElroDevice) -> None:
         """Handle device updates."""
@@ -273,11 +267,15 @@ class ElroConnectsCapabilitySensor(ElroConnectsBinarySensor):
     """
 
     def __init__(
-        self, device: ElroDevice, hub: ElroHub, capability: DeviceCapability
+        self,
+        device: ElroDevice,
+        hub: ElroHub,
+        created: set[str],
+        capability: DeviceCapability,
     ) -> None:
         """Initialize the capability sensor."""
         self._capability = capability
-        super().__init__(device, hub)
+        super().__init__(device, hub, created)
         self._attr_device_class = _CAPABILITY_DEVICE_CLASSES.get(
             capability.device_class
         )

@@ -20,10 +20,12 @@ from .const import (
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_PROTOCOL,
+    DATA_CREATED_UNIQUE_IDS,
     DOMAIN,
     PROTOCOL_AUTO,
     PROTOCOL_K1,
     PROTOCOL_K2,
+    SUBDEVICE_PREFIX,
 )
 from .detect import async_detect_protocol
 from .device import ElroDevice
@@ -55,32 +57,106 @@ SERVICE_REMOVE_STALE_DEVICES_SCHEMA = vol.Schema({})
 
 SERVICES = ("test_alarm", "sync_devices", "get_device_names", "remove_stale_devices")
 
-# Prefix of ElroDevice.unique_id, which is both the device registry identifier
-# of a sub-device and the leading part of every entity unique ID.
-SUBDEVICE_PREFIX = "elro_realtime_"
-
 
 def _subdevice_id_from_identifiers(device_entry: dr.DeviceEntry) -> int | None:
-    """Return the ELRO sub-device ID of a registry device, or None for the hub."""
+    """Return the ELRO sub-device ID of a registry device, or None for the hub.
+
+    Handles both the current f"{SUBDEVICE_PREFIX}{hub_id}_{sub_id}" identifiers
+    and the pre-migration f"{SUBDEVICE_PREFIX}{sub_id}" ones, since the sub-device
+    ID is the last segment either way.
+    """
     for domain, identifier in device_entry.identifiers:
         if domain != DOMAIN or not identifier.startswith(SUBDEVICE_PREFIX):
             continue
         try:
-            return int(identifier[len(SUBDEVICE_PREFIX) :])
+            return int(identifier.rsplit("_", 1)[-1])
         except ValueError:
             return None
     return None
 
 
-def _subdevice_id_from_unique_id(unique_id: str) -> int | None:
-    """Return the ELRO sub-device ID an entity unique ID belongs to."""
-    if not unique_id.startswith(SUBDEVICE_PREFIX):
+def _rescope_id(old_id: str, hub_id: str) -> str | None:
+    """Return the hub-scoped form of an unscoped identifier, or None.
+
+    None means "leave this one alone": it is not ours, or it is already scoped.
+    """
+    if not old_id.startswith(SUBDEVICE_PREFIX):
         return None
-    head = unique_id[len(SUBDEVICE_PREFIX) :].split("_", 1)[0]
-    try:
-        return int(head)
-    except ValueError:
+    if old_id.startswith(f"{SUBDEVICE_PREFIX}{hub_id}_"):
         return None
+    remainder = old_id[len(SUBDEVICE_PREFIX) :]
+    # An unscoped ID has the numeric sub-device ID first; a scoped one has the
+    # hub ID there ("ST_abcf234adbfd").
+    if not remainder.split("_", 1)[0].isdigit():
+        return None
+    return f"{SUBDEVICE_PREFIX}{hub_id}_{remainder}"
+
+
+def _async_migrate_registry_ids(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Add the hub ID to registry identifiers written before they were scoped.
+
+    Sub-device IDs restart at 1 on every hub, so the original
+    f"{SUBDEVICE_PREFIX}{sub_id}" scheme collided when two hubs were configured:
+    the second hub's entities landed on the first hub's devices, and one of the
+    two lost its entities entirely. Renaming in place keeps entity IDs, history
+    and customisations; this is idempotent, so it can run on every setup.
+    """
+    hub_id = entry.data[CONF_DEVICE_ID]
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+
+    migrated_entities = 0
+    for entity_entry in er.async_entries_for_config_entry(
+        entity_registry, entry.entry_id
+    ):
+        new_unique_id = _rescope_id(entity_entry.unique_id, hub_id)
+        if new_unique_id is None:
+            continue
+        if entity_registry.async_get_entity_id(
+            entity_entry.domain, DOMAIN, new_unique_id
+        ):
+            # The scoped entity already exists — this entry is a collided
+            # leftover, which remove_stale_devices can clear out.
+            _LOGGER.debug(
+                "Not migrating %s: %s is already taken",
+                entity_entry.entity_id,
+                new_unique_id,
+            )
+            continue
+        entity_registry.async_update_entity(
+            entity_entry.entity_id, new_unique_id=new_unique_id
+        )
+        migrated_entities += 1
+
+    migrated_devices = 0
+    for device_entry in dr.async_entries_for_config_entry(
+        device_registry, entry.entry_id
+    ):
+        # A device shared with another entry is one of the collisions this fix
+        # exists for. Renaming it would take it away from the other hub, so it
+        # is left behind and a correctly scoped device is created instead.
+        if len(device_entry.config_entries) > 1:
+            continue
+        new_identifiers = set()
+        changed = False
+        for domain, identifier in device_entry.identifiers:
+            rescoped = _rescope_id(identifier, hub_id) if domain == DOMAIN else None
+            new_identifiers.add((domain, rescoped or identifier))
+            changed = changed or rescoped is not None
+        if not changed:
+            continue
+        device_registry.async_update_device(
+            device_entry.id, new_identifiers=new_identifiers
+        )
+        migrated_devices += 1
+
+    if migrated_entities or migrated_devices:
+        _LOGGER.info(
+            "Scoped %d device(s) and %d entity(ies) to hub %s",
+            migrated_devices,
+            migrated_entities,
+            hub_id,
+        )
 
 
 async def _async_resolve_protocol(hass: HomeAssistant, entry: ConfigEntry) -> str:
@@ -114,6 +190,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     protocol = await _async_resolve_protocol(hass, entry)
 
+    # Must run before any entity registers, so entities come up on the identity
+    # they will keep.
+    _async_migrate_registry_ids(hass, entry)
+
     # Create hub device in device registry first - BEFORE creating hub instance
     device_registry = dr.async_get(hass)
     device_registry.async_get_or_create(
@@ -146,6 +226,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = {
         "hub": hub,
         "coordinator": coordinator,
+        # Filled in by the entity platforms; see the note in sensor.py on why
+        # this lives here and not in module state.
+        DATA_CREATED_UNIQUE_IDS: set(),
     }
 
     # Start the hub connection. A hub that is offline — or, for the K2, a UDP
@@ -226,22 +309,15 @@ async def _async_register_services(hass: HomeAssistant) -> None:
         layout on devices that do still exist (a K1 "alarm" entity next to the
         K2 per-hazard ones, for instance).
         """
-        # Imported here so setting up the integration does not pull in the
-        # entity platform modules before Home Assistant asks for them.
-        from .binary_sensor import created_binary_sensor_unique_ids
-        from .sensor import created_sensor_unique_ids
-
         device_registry = dr.async_get(hass)
         entity_registry = er.async_get(hass)
-        live_unique_ids = (
-            created_binary_sensor_unique_ids() | created_sensor_unique_ids()
-        )
         removed_devices = 0
         removed_entities = 0
 
         for entry_id, entry_data in hass.data[DOMAIN].items():
             hub = entry_data["hub"]
             live_ids = set(hub.devices)
+            live_unique_ids: set[str] = entry_data[DATA_CREATED_UNIQUE_IDS]
 
             for device_entry in dr.async_entries_for_config_entry(
                 device_registry, entry_id
@@ -269,14 +345,26 @@ async def _async_register_services(hass: HomeAssistant) -> None:
             ):
                 if entity_entry.unique_id in live_unique_ids:
                     continue
-                sub_id = _subdevice_id_from_unique_id(entity_entry.unique_id)
+                # Resolved through the device link rather than by parsing the
+                # unique ID, which cannot be split reliably: both the hub ID and
+                # the entity suffix contain underscores.
+                device_entry = (
+                    device_registry.async_get(entity_entry.device_id)
+                    if entity_entry.device_id
+                    else None
+                )
+                sub_id = (
+                    _subdevice_id_from_identifiers(device_entry)
+                    if device_entry
+                    else None
+                )
                 # Entities of a removed device went with it above.
                 if sub_id is None or sub_id not in live_ids:
                     continue
                 # Only prune when this device does have current entities;
                 # otherwise a device that was missing from the last sync would
                 # lose all of them.
-                prefix = f"{SUBDEVICE_PREFIX}{sub_id}_"
+                prefix = f"{hub.devices[sub_id].unique_id}_"
                 if not any(uid.startswith(prefix) for uid in live_unique_ids):
                     continue
                 _LOGGER.info("Removing stale ELRO entity %s", entity_entry.entity_id)

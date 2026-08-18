@@ -16,7 +16,14 @@ from homeassistant.const import PERCENTAGE
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import ATTR_DEVICE_ID, ATTR_DEVICE_TYPE, ATTR_LAST_SEEN, DOMAIN, PROTOCOL_K2
+from .const import (
+    ATTR_DEVICE_ID,
+    ATTR_DEVICE_TYPE,
+    ATTR_LAST_SEEN,
+    DATA_CREATED_UNIQUE_IDS,
+    DOMAIN,
+    PROTOCOL_K2,
+)
 from .device import ElroDevice
 from .models import ElroHub
 
@@ -30,18 +37,6 @@ _CAPABILITY_DEVICE_CLASSES: dict[str, SensorDeviceClass] = {
     "humidity": SensorDeviceClass.HUMIDITY,
 }
 
-# Global registry to track created entities
-_CREATED_SENSOR_ENTITIES: set[str] = set()
-
-
-def created_sensor_unique_ids() -> set[str]:
-    """Return the unique IDs of the sensor entities this platform has created.
-
-    Used by the stale-device cleanup service to tell a leftover registry entry
-    from one that is still being served.
-    """
-    return set(_CREATED_SENSOR_ENTITIES)
-
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -49,17 +44,23 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up ELRO Connects sensor platform."""
-    hub: ElroHub = hass.data[DOMAIN][config_entry.entry_id]["hub"]
+    entry_data = hass.data[DOMAIN][config_entry.entry_id]
+    hub: ElroHub = entry_data["hub"]
+    # Shared with the binary sensor platform and discarded when the entry
+    # unloads. It must not be module state: an ID recorded here for an entity
+    # Home Assistant then refused to add would suppress that entity for the rest
+    # of the process, which no reload could clear.
+    created: set[str] = entry_data[DATA_CREATED_UNIQUE_IDS]
 
     entities = []
 
     # Create sensors for existing devices
     for device in hub.devices.values():
-        new_entities = _create_sensors_for_device(device, hub)
+        new_entities = _create_sensors_for_device(device, hub, created)
         for entity in new_entities:
-            if entity.unique_id not in _CREATED_SENSOR_ENTITIES:
+            if entity.unique_id not in created:
                 entities.append(entity)
-                _CREATED_SENSOR_ENTITIES.add(entity.unique_id)
+                created.add(entity.unique_id)
             else:
                 _LOGGER.debug("Skipping duplicate sensor entity: %s", entity.unique_id)
 
@@ -74,13 +75,13 @@ async def async_setup_entry(
         if device.battery_level < 0 and not device.device_type:
             return
 
-        new_entities = _create_sensors_for_device(device, hub)
+        new_entities = _create_sensors_for_device(device, hub, created)
         entities_to_add = []
 
         for entity in new_entities:
-            if entity.unique_id not in _CREATED_SENSOR_ENTITIES:
+            if entity.unique_id not in created:
                 entities_to_add.append(entity)
-                _CREATED_SENSOR_ENTITIES.add(entity.unique_id)
+                created.add(entity.unique_id)
 
         if entities_to_add:
             async_add_entities(entities_to_add, True)
@@ -94,7 +95,7 @@ async def async_setup_entry(
 
 
 def _create_sensors_for_device(
-    device: ElroDevice, hub: ElroHub
+    device: ElroDevice, hub: ElroHub, created: set[str]
 ) -> list[ElroConnectsSensor]:
     """Create sensors for a device."""
     entities: list[ElroConnectsSensor] = []
@@ -102,19 +103,26 @@ def _create_sensors_for_device(
     # K2: battery and signal come from every device, measurements only from the
     # ones whose profile in the protocol library declares them.
     if device.protocol == PROTOCOL_K2:
-        entities.append(ElroConnectsBatterySensor(device, hub))
+        entities.append(ElroConnectsBatterySensor(device, hub, created))
         if device.signal_bars is not None:
-            entities.append(ElroConnectsSignalSensor(device, hub))
+            entities.append(ElroConnectsSignalSensor(device, hub, created))
         entities.extend(
-            ElroConnectsCapabilitySensor(device, hub, capability)
+            ElroConnectsCapabilitySensor(device, hub, created, capability)
             for capability in device.capabilities
             if capability.entity_type == "sensor"
+        )
+        _LOGGER.debug(
+            "K2 device %d (%s, battery=%d%%): sensors %s",
+            device.id,
+            device.model_name,
+            device.battery_level,
+            [entity.unique_id for entity in entities],
         )
         return entities
 
     # All devices get a battery sensor if they have battery info
     if device.battery_level >= 0:
-        entities.append(ElroConnectsBatterySensor(device, hub))
+        entities.append(ElroConnectsBatterySensor(device, hub, created))
 
     return entities
 
@@ -122,10 +130,11 @@ def _create_sensors_for_device(
 class ElroConnectsSensor(SensorEntity):
     """Base class for ELRO Connects sensors."""
 
-    def __init__(self, device: ElroDevice, hub: ElroHub) -> None:
+    def __init__(self, device: ElroDevice, hub: ElroHub, created: set[str]) -> None:
         """Initialize the sensor."""
         self._device = device
         self._hub = hub
+        self._created = created
         self._device_id = device.id
         self._attr_unique_id = f"{device.unique_id}_{self._sensor_type}"
         self._attr_device_info = device.device_info
@@ -177,9 +186,9 @@ class ElroConnectsSensor(SensorEntity):
     async def async_will_remove_from_hass(self) -> None:
         """When entity is removed from hass."""
         self._hub.remove_device_update_callback(self._async_device_updated)
-        # Remove from tracking
-        if self.unique_id in _CREATED_SENSOR_ENTITIES:
-            _CREATED_SENSOR_ENTITIES.remove(self.unique_id)
+        # Untrack so the entity can be recreated if the device comes back.
+        if self.unique_id is not None:
+            self._created.discard(self.unique_id)
 
     def _async_device_updated(self, device: ElroDevice) -> None:
         """Handle device updates."""
@@ -286,11 +295,15 @@ class ElroConnectsCapabilitySensor(ElroConnectsSensor):
     """
 
     def __init__(
-        self, device: ElroDevice, hub: ElroHub, capability: DeviceCapability
+        self,
+        device: ElroDevice,
+        hub: ElroHub,
+        created: set[str],
+        capability: DeviceCapability,
     ) -> None:
         """Initialize the capability sensor."""
         self._capability = capability
-        super().__init__(device, hub)
+        super().__init__(device, hub, created)
         self._attr_device_class = _CAPABILITY_DEVICE_CLASSES.get(
             capability.device_class
         )
