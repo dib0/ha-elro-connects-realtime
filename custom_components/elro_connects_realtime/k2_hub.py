@@ -431,29 +431,40 @@ class ElroK2Hub:
         """See every decoded frame, then let the library handle it as usual.
 
         The library is called first so its automatic ACK goes back to the hub
-        without waiting on anything here.
+        without waiting on anything here, and a failure in there does not stop
+        the frame from being inspected below - a frame the library chokes on is
+        exactly the kind this wrapper exists for. Its exception is logged and
+        swallowed: this runs from the UDP receive callback, so propagating it
+        would only reach asyncio's exception handler.
+
+        Not a try/finally: a "return" inside a finally block discards whatever
+        exception the try raised (and is a SyntaxWarning as of Python 3.14).
         """
         try:
             self._gateway_on_message(obj, source_ip)
-        finally:
-            msg = obj.get("msg")
-            if not isinstance(msg, dict):
-                return
-            payload = msg.get(_ALARM_MESSAGE_FIELD)
-            if isinstance(payload, str):
-                self._handle_alarm_message(payload)
-                return
-            cmd_code = msg.get("CMD_CODE")
-            if cmd_code not in _LIBRARY_CMD_CODES:
-                # Not necessarily wrong - the hub sends frames this integration
-                # has no use for - but an unhandled code is the first thing to
-                # look at when a hub talks and nothing appears in Home Assistant.
-                _LOGGER.debug(
-                    "K2 frame from %s with CMD_CODE %s not routed by the library: %s",
-                    source_ip,
-                    cmd_code,
-                    msg,
-                )
+        except Exception:
+            _LOGGER.exception(
+                "Protocol library failed to handle a frame from %s: %s", source_ip, obj
+            )
+
+        msg = obj.get("msg")
+        if not isinstance(msg, dict):
+            return
+        payload = msg.get(_ALARM_MESSAGE_FIELD)
+        if isinstance(payload, str):
+            self._handle_alarm_message(payload)
+            return
+        cmd_code = msg.get("CMD_CODE")
+        if cmd_code not in _LIBRARY_CMD_CODES:
+            # Not necessarily wrong - the hub sends frames this integration has
+            # no use for - but an unhandled code is the first thing to look at
+            # when a hub talks and nothing appears in Home Assistant.
+            _LOGGER.debug(
+                "K2 frame from %s with CMD_CODE %s not routed by the library: %s",
+                source_ip,
+                cmd_code,
+                msg,
+            )
 
     def _handle_alarm_message(self, payload: str) -> None:
         """Apply an alarm notification to the device it names."""
