@@ -368,7 +368,10 @@ class ElroConnectsHub:
                 # The K1 hub answers in plain UTF-8 JSON
                 try:
                     reply = data.decode("utf-8").strip()
-                    _LOGGER.debug("Received message from %s: %s", addr, reply[:100])
+                    # Logged in full: a device status reply runs well past the
+                    # first 100 characters, and the device list is the part worth
+                    # having when someone reports missing devices.
+                    _LOGGER.debug("Received message from %s: %s", addr, reply)
 
                     if reply == "{ST_answer_OK}":
                         _LOGGER.debug("Received connection acknowledgment")
@@ -640,8 +643,18 @@ class ElroConnectsHub:
                 # Check if we received data recently
                 time_since_last_data = datetime.now() - self._last_data_received
                 if time_since_last_data > timedelta(minutes=2):  # 2 minute timeout
+                    # This is the line the K2 reports in the issue tracker keep
+                    # quoting, so it says which protocol is talking and what to
+                    # do about it: a K2 (SF50GA) hub answers nothing at all on
+                    # the K1 protocol.
                     _LOGGER.warning(
-                        "No data received for %s, reconnecting", time_since_last_data
+                        "No data received from the K1 hub at %s for %s, "
+                        "reconnecting (%d device(s) known). If this repeats and "
+                        "no devices appear, the hub may be a K2: remove it and "
+                        "add it again with the protocol set to K2",
+                        self._host,
+                        time_since_last_data,
+                        len(self._devices),
                     )
                     await self._async_reconnect()
                 else:

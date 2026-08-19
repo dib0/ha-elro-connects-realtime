@@ -12,12 +12,15 @@ Library: https://github.com/ldebruijn/elro-connects-k2-protocol
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import logging
+import socket
 from datetime import datetime
 from typing import Any, Callable, NamedTuple
 
 from elro_connects_k2_protocol.gateway import K2Gateway
 from elro_connects_k2_protocol.models import AlarmState, SubDevice, UpdateSource
+from elro_connects_k2_protocol.protocol import UDP_PORT, decrypt_message
 
 from .const import (
     DEVICE_STATE_ALARM,
@@ -59,6 +62,11 @@ _ALARM_MESSAGE_FIELD = "alarmMessage"
 # once instead of silently dropped.
 _LIBRARY_CMD_CODES = frozenset({11, 13, 17, 19, 55, 56, 62, 66})
 
+# How much of an undecodable datagram to hex-dump. Long enough to recognise a
+# frame (the XOR seed plus the start of the JSON), short enough not to flood the
+# log with whatever else is broadcasting on port 1025.
+_HEXDUMP_BYTES = 64
+
 
 class ElroK2Hub:
     """Communicate with an ELRO Connects K2 hub through the protocol library."""
@@ -79,6 +87,17 @@ class ElroK2Hub:
         # the library installed, which is the same trap the mypy overrides in
         # pyproject.toml document for imports.
         setattr(self._gateway, "_on_message", self._on_gateway_message)
+        # Same trick for the send path, so debug logging shows both directions of
+        # the conversation and not just what came back.
+        self._gateway_send = self._gateway._send
+        setattr(self._gateway, "_send", self._send_and_log)
+        # Traffic counters, reported with the "no devices" warning below: they are
+        # what separates "nothing reaches us at all" (firewall, port 1025 taken,
+        # hub on another subnet) from "frames arrive but say nothing useful".
+        self._frames_sent = 0
+        self._frames_received = 0
+        self._frames_undecodable = 0
+        self._last_frame_received: datetime | None = None
         self._devices: dict[int, ElroDevice] = {}
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
         self._running = False
@@ -130,7 +149,16 @@ class ElroK2Hub:
 
         try:
             self._gateway.add_update_callback(self._handle_gateway_update)
+            _LOGGER.debug(
+                "Connecting to K2 hub %s at %s:%d (local UDP port %d)",
+                self._device_id,
+                self._host,
+                UDP_PORT,
+                UDP_PORT,
+            )
             await self._gateway.connect()
+            self._instrument_transport()
+            self._log_socket_details()
 
             # CMD_CODE 54 -> 55/56, followed by the nickname sync (24 -> 17).
             await self.async_sync_devices()
@@ -176,6 +204,8 @@ class ElroK2Hub:
 
         await self._gateway.disconnect()
         await self._gateway.connect()
+        self._instrument_transport()
+        self._log_socket_details()
         await self.async_sync_devices()
 
         self._reloading = False
@@ -194,11 +224,24 @@ class ElroK2Hub:
             # error. Left silent, every device just quietly goes stale.
             _LOGGER.warning(
                 "K2 sync returned no devices; the hub at %s did not answer "
-                "CMD_CODE 54 (devices will go unavailable if this persists)",
+                "CMD_CODE 54 (devices will go unavailable if this persists). "
+                "%s. Enable debug logging in the integration options to see "
+                "every frame",
                 self._host,
+                self._traffic_summary(),
             )
         else:
-            _LOGGER.debug("K2 sync returned %d device(s)", len(devices))
+            _LOGGER.debug(
+                "K2 sync returned %d device(s): %s",
+                len(devices),
+                ", ".join(
+                    f"{sub_id}={sub_device.profile.name}"
+                    f"/{sub_device.raw_type}"
+                    f"/{sub_device.alarm_state.name}"
+                    f"/{sub_device.battery_pct}%"
+                    for sub_id, sub_device in sorted(devices.items())
+                ),
+            )
 
         for sub_id, sub_device in devices.items():
             self._update_device(sub_id, sub_device)
@@ -216,6 +259,8 @@ class ElroK2Hub:
         async with self._sync_lock:
             await self._gateway.activate()
             names = await self._gateway.sync_device_names()
+
+        _LOGGER.debug("K2 name sync returned %d name(s): %s", len(names), names)
 
         for sub_id, name in names.items():
             device = self._devices.get(sub_id)
@@ -252,11 +297,135 @@ class ElroK2Hub:
         while self._running:
             try:
                 await asyncio.sleep(K2_KEEPALIVE_SECONDS)
+                _LOGGER.debug("K2 keepalive: %s", self._traffic_summary())
                 await self._gateway.activate()
             except asyncio.CancelledError:
                 break
             except Exception as ex:
                 _LOGGER.error("Error in K2 keepalive: %s", ex)
+
+    def _instrument_transport(self) -> None:
+        """Log every inbound datagram, including the ones the library discards.
+
+        ``_K2Protocol.datagram_received`` drops anything ``decrypt_message``
+        cannot turn into a JSON object, without a word in the log, so a hub that
+        answers with something unexpected looks exactly like a hub that answers
+        nothing at all. The library builds a fresh protocol object on every
+        ``connect()``, hence the re-instrumentation after each one; asyncio looks
+        ``datagram_received`` up on the instance, so shadowing it there is enough.
+        """
+        protocol = getattr(self._gateway, "_protocol", None)
+        if protocol is None:
+            _LOGGER.debug("No UDP protocol object to instrument for frame logging")
+            return
+        if getattr(protocol, "_elro_frame_logging", False):
+            return
+
+        original = protocol.datagram_received
+
+        def datagram_received(data: bytes, addr: tuple[str, int]) -> None:
+            self._log_datagram(data, addr)
+            original(data, addr)
+
+        setattr(protocol, "datagram_received", datagram_received)
+        setattr(protocol, "_elro_frame_logging", True)
+
+    def _log_socket_details(self) -> None:
+        """Log which local address the hub conversation is bound to.
+
+        A K2 only answers requests that came from local port 1025, so a socket
+        that ended up somewhere else explains total silence. The route lookup
+        adds the source address the kernel will use towards the hub, which is how
+        a container bridged onto its own subnet (where the hub's replies never
+        come back) shows up.
+        """
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+
+        transport = getattr(self._gateway, "_transport", None)
+        sock = transport.get_extra_info("socket") if transport is not None else None
+        try:
+            bound = sock.getsockname() if sock is not None else None
+        except OSError as ex:
+            bound = f"unavailable ({ex})"
+        _LOGGER.debug(
+            "K2 socket bound to %s, talking to %s:%d (local route: %s)",
+            bound,
+            self._host,
+            UDP_PORT,
+            self._route_source_address(),
+        )
+
+    def _route_source_address(self) -> str:
+        """Return the local address the kernel would send from, for logging."""
+        try:
+            # Only for a literal address: a hostname would have to be resolved,
+            # and that blocks the event loop.
+            ipaddress.ip_address(self._host)
+        except ValueError:
+            return "not checked (host is a name, not an address)"
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                # UDP connect() only picks a route; it sends nothing.
+                probe.connect((self._host, UDP_PORT))
+                return "%s:%d" % probe.getsockname()
+        except OSError as ex:
+            return f"unavailable ({ex})"
+
+    def _traffic_summary(self) -> str:
+        """One-line UDP traffic tally for the warnings that need the context."""
+        if self._frames_received == 0:
+            return (
+                f"nothing at all has been received from {self._host} since start "
+                f"({self._frames_sent} frame(s) sent); check that UDP port "
+                f"{UDP_PORT} is reachable in both directions and not already in "
+                "use on this host"
+            )
+        return (
+            f"{self._frames_sent} frame(s) sent, {self._frames_received} received "
+            f"({self._frames_undecodable} undecodable), last one at "
+            f"{self._last_frame_received}"
+        )
+
+    def _send_and_log(self, message: str) -> None:
+        """Log an outgoing frame, then hand it to the library to send."""
+        self._frames_sent += 1
+        _LOGGER.debug("K2 --> %s:%d %s", self._host, UDP_PORT, message)
+        self._gateway_send(message)
+
+    def _log_datagram(self, data: bytes, addr: tuple[str, int]) -> None:
+        """Log one received datagram. Never raises: this sits in the RX path."""
+        try:
+            self._frames_received += 1
+            self._last_frame_received = datetime.now()
+            from_hub = addr[0] == self._host
+            # Decoded even with debug off: the undecodable case is warned about
+            # either way, and the traffic rate here is a few frames a minute.
+            text, obj = decrypt_message(data)
+            if obj is None:
+                self._frames_undecodable += 1
+                # Warning only for the hub itself; port 1025 also sees discovery
+                # broadcasts from unrelated devices, and those are not a fault.
+                log = _LOGGER.warning if from_hub else _LOGGER.debug
+                log(
+                    "K2 <-- %s:%d %d byte(s) that did not decode: hex=%s text=%r",
+                    addr[0],
+                    addr[1],
+                    len(data),
+                    data[:_HEXDUMP_BYTES].hex(),
+                    text[:200],
+                )
+                return
+
+            _LOGGER.debug(
+                "K2 <-- %s:%d%s %s",
+                addr[0],
+                addr[1],
+                "" if from_hub else " (not our hub)",
+                text,
+            )
+        except Exception as ex:  # pragma: no cover - logging must not break RX
+            _LOGGER.debug("Could not log received datagram from %s: %s", addr, ex)
 
     def _on_gateway_message(self, obj: dict[str, Any], source_ip: str) -> None:
         """See every decoded frame, then let the library handle it as usual.
@@ -276,7 +445,15 @@ class ElroK2Hub:
                 return
             cmd_code = msg.get("CMD_CODE")
             if cmd_code not in _LIBRARY_CMD_CODES:
-                _LOGGER.debug("K2 frame with unhandled CMD_CODE %s: %s", cmd_code, msg)
+                # Not necessarily wrong - the hub sends frames this integration
+                # has no use for - but an unhandled code is the first thing to
+                # look at when a hub talks and nothing appears in Home Assistant.
+                _LOGGER.debug(
+                    "K2 frame from %s with CMD_CODE %s not routed by the library: %s",
+                    source_ip,
+                    cmd_code,
+                    msg,
+                )
 
     def _handle_alarm_message(self, payload: str) -> None:
         """Apply an alarm notification to the device it names."""

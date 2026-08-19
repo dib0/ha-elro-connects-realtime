@@ -22,6 +22,7 @@ plain-text UDP implementation. If you only have K2 hardware, also have a look at
 - **🏠 Multiple Device Types**: Supports various ELRO Connects devices
 - **🛠️ Service Calls**: Test alarms and sync devices via Home Assistant services
 - **🔄 Auto Discovery**: Automatic device discovery and naming
+- **🐞 Debug Logging Toggle**: Log every UDP frame from the integration options, no YAML needed
 
 ## Supported Devices
 
@@ -299,7 +300,34 @@ payload, and counted as `Frames not routed` in the closing statistics.
 
 ### Debug Logging
 
-Enable debug logging to troubleshoot issues:
+**Settings → Devices & services → ELRO Connects Real-time → Configure → Enable debug logging.**
+
+This raises both `custom_components.elro_connects_realtime` and the
+`elro_connects_k2_protocol` library to `DEBUG`. It takes effect immediately - no
+restart, no reload - and turning it off restores the level the loggers had. With
+several hubs configured the option only needs ticking on one of them, since
+logger levels are global.
+
+What it adds, in the order it is useful when a hub is not working:
+
+| Log line | What it tells you |
+| --- | --- |
+| `Detected k1/k2 protocol for hub ...: <reason>` | Whether detection saw a real K2 answer, or fell back to K1 because nothing came back |
+| `Cannot bind UDP port 1025 ...` (warning) | Something else on the host holds the port a K2 needs; a K2 cannot work in this state |
+| `K2 socket bound to ..., talking to ... (local route: ...)` | Which local address the hub is reachable from - a source address on a different subnet than the hub means the replies will not come back |
+| `K2 --> <ip>:1025 {...}` | Every frame sent, including the activation ping and keepalives |
+| `K2 <-- <ip>:<port> {...}` | Every frame received, with the port the hub answered from |
+| `K2 <-- ... did not decode` (warning) | The hub answered with something that is not a K2 frame - the hex dump is on the same line |
+| `K2 sync returned no devices ...` (warning) | Ends with a traffic tally: how many frames went out, how many came back, and when the last one arrived |
+| `K2 frame ... CMD_CODE <n> not routed by the library` | The hub is talking, but about something the library does not decode |
+
+If devices still do not appear, the tally on the `no devices` warning is the
+quickest split: **nothing received at all** points at the network or at port 1025
+(firewall, hub on another subnet, a Docker bridge in between), while **frames
+received but no devices** points at the protocol and is worth an issue report.
+
+Debug logging can also be switched on in `configuration.yaml` instead, which
+covers the initial setup of an entry before the option is reachable:
 
 ```yaml
 logger:

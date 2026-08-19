@@ -16,11 +16,13 @@ from homeassistant.helpers import selector
 from .const import (
     CONF_APP_ID,
     CONF_CTRL_KEY,
+    CONF_DEBUG_LOGGING,
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_PROTOCOL,
     DEFAULT_APP_ID,
     DEFAULT_CTRL_KEY,
+    DEFAULT_DEBUG_LOGGING,
     DEFAULT_PORT,
     DOMAIN,
     PROTOCOL_AUTO,
@@ -108,6 +110,19 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
 
     VERSION = 1
 
+    @staticmethod
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> OptionsFlow:
+        """Return the options flow, which is what adds the "Configure" button.
+
+        Home Assistant calls this from the event loop and it does no I/O, so the
+        usual @callback decorator would only be documentation - and it types as
+        untyped in a lint environment without Home Assistant installed, which is
+        what CI runs.
+        """
+        return OptionsFlow()
+
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
@@ -142,6 +157,38 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):  # type: ignore[call
                 "device_id_example": "ST_dc4f224febfd",
                 "host_example": "192.168.1.100",
             },
+        )
+
+
+class OptionsFlow(config_entries.OptionsFlow):
+    """Handle the options of a configured hub.
+
+    Only debug logging so far. It lives in the options rather than in the entry
+    data so it can be flipped without re-running the config flow, and applying it
+    does not reload the entry: see _async_options_updated in __init__.py.
+    """
+
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Manage the options."""
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        # self.config_entry is provided by the framework; assigning it in
+        # __init__ has been deprecated since Home Assistant 2024.11.
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_DEBUG_LOGGING,
+                        default=self.config_entry.options.get(
+                            CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING
+                        ),
+                    ): selector.BooleanSelector(),
+                }
+            ),
         )
 
 

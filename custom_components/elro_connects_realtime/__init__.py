@@ -17,11 +17,14 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONF_DEBUG_LOGGING,
     CONF_DEVICE_ID,
     CONF_HOST,
     CONF_PROTOCOL,
     DATA_CREATED_UNIQUE_IDS,
+    DEFAULT_DEBUG_LOGGING,
     DOMAIN,
+    K2_PROTOCOL_LOGGER,
     PROTOCOL_AUTO,
     PROTOCOL_K1,
     PROTOCOL_K2,
@@ -36,6 +39,20 @@ from .models import ElroHub
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.SENSOR]
+
+# Loggers the debug_logging option raises to DEBUG: this integration's own
+# package and the K2 protocol library, which is where the wire-level detail
+# lives. __package__ is spelled out as a fallback so the tuple stays correct if
+# the module is ever imported in a way that leaves it unset.
+DEBUG_LOGGERS: tuple[str, ...] = (
+    __package__ or "custom_components.elro_connects_realtime",
+    K2_PROTOCOL_LOGGER,
+)
+
+# Levels those loggers had before the option was first applied. Turning the
+# option off restores them instead of blanking them to NOTSET, so a level set in
+# configuration.yaml (or by the logger integration before we ran) survives.
+_ORIGINAL_LOG_LEVELS: dict[str, int] = {}
 
 # The K2 pushes state changes, so polling only refreshes battery/signal values
 # and catches anything missed; the K1 needs the tighter loop it always had.
@@ -159,6 +176,44 @@ def _async_migrate_registry_ids(hass: HomeAssistant, entry: ConfigEntry) -> None
         )
 
 
+def _apply_debug_logging(hass: HomeAssistant) -> None:
+    """Set the integration and protocol library logger levels from the option.
+
+    Loggers are global while the option is per config entry, so debug logging is
+    on as soon as *any* configured hub asks for it: with a K1 and a K2 entry side
+    by side, ticking the box on the misbehaving one is enough. Called on setup,
+    on unload and whenever the options change.
+    """
+    enabled = any(
+        entry.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)
+        for entry in hass.config_entries.async_entries(DOMAIN)
+    )
+    for name in DEBUG_LOGGERS:
+        logger = logging.getLogger(name)
+        original = _ORIGINAL_LOG_LEVELS.setdefault(name, logger.level)
+        logger.setLevel(logging.DEBUG if enabled else original)
+
+    if enabled:
+        # At INFO so it is visible in a log that was captured before the option
+        # was switched on, which is where the question "was debug even on?"
+        # usually gets asked.
+        _LOGGER.info(
+            "Debug logging enabled for %s; this logs every UDP frame exchanged "
+            "with the hub. Turn it off in the integration options when done",
+            ", ".join(DEBUG_LOGGERS),
+        )
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Apply changed options.
+
+    Only the logger levels are involved, and those take effect immediately, so
+    the entry does not need reloading - the hub connection and every entity stay
+    up while debug logging is switched on or off.
+    """
+    _apply_debug_logging(hass)
+
+
 async def _async_resolve_protocol(hass: HomeAssistant, entry: ConfigEntry) -> str:
     """Return the protocol to use for this entry, detecting it when needed.
 
@@ -188,6 +243,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up ELRO Connects from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
+    # First thing in setup, so protocol detection and the hub handshake below are
+    # already covered when the user turns the option on and reloads.
+    _apply_debug_logging(hass)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    _LOGGER.debug(
+        "Setting up entry %s: host=%s device_id=%s configured_protocol=%s options=%s",
+        entry.entry_id,
+        entry.data.get(CONF_HOST),
+        entry.data.get(CONF_DEVICE_ID),
+        entry.data.get(CONF_PROTOCOL),
+        dict(entry.options),
+    )
+
     protocol = await _async_resolve_protocol(hass, entry)
 
     # Must run before any entity registers, so entities come up on the identity
@@ -210,6 +279,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Create hub instance
     hub: ElroHub
+    _LOGGER.debug("Creating %s hub instance for %s", protocol, entry.data[CONF_HOST])
     if protocol == PROTOCOL_K2:
         hub = ElroK2Hub(
             host=entry.data[CONF_HOST], device_id=entry.data[CONF_DEVICE_ID]
@@ -248,6 +318,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await hub.async_start()
     except Exception as ex:
         hass.data[DOMAIN].pop(entry.entry_id, None)
+        # The traceback names which step of the handshake failed, which is the
+        # whole question in the "no devices" reports. At debug level: Home
+        # Assistant retries a not-ready entry indefinitely, and an offline hub
+        # should not fill the log with tracebacks.
+        _LOGGER.debug("Hub start failed for %s", entry.data[CONF_HOST], exc_info=True)
         raise ConfigEntryNotReady(
             f"Could not connect to the {protocol} hub at {entry.data[CONF_HOST]}: {ex}"
         ) from ex
@@ -259,6 +334,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Refresh initial data
     await coordinator.async_config_entry_first_refresh()
+    _LOGGER.debug(
+        "First refresh done for %s: %d device(s) known (%s)",
+        entry.data[CONF_HOST],
+        len(hub.devices),
+        ", ".join(f"{sub_id}={device.name}" for sub_id, device in hub.devices.items())
+        or "none",
+    )
 
     # Forward the setup to the platforms (this creates entities)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
@@ -440,6 +522,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         _LOGGER.info("Successfully unloaded ELRO Connects entry")
     else:
         _LOGGER.error("Failed to unload ELRO Connects platforms")
+
+    # Recheck the option now this entry is on its way out: any other hub still
+    # asking for debug logging keeps it on, otherwise the loggers go back to the
+    # level they had. A reload still counts the entry that is coming back, so no
+    # debug output is lost across one.
+    _apply_debug_logging(hass)
 
     # Remove services if this is the last entry
     if not hass.data[DOMAIN]:

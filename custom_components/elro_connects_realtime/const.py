@@ -9,10 +9,21 @@ CONF_CTRL_KEY = "ctrl_key"
 CONF_APP_ID = "app_id"
 CONF_PROTOCOL = "protocol"
 
+# Config entry *option* (not data): turns on wire-level debug logging for this
+# integration and for the K2 protocol library, without the user having to edit
+# configuration.yaml. See _apply_debug_logging in __init__.py.
+CONF_DEBUG_LOGGING = "debug_logging"
+
 # Default values
 DEFAULT_PORT = 1025
 DEFAULT_CTRL_KEY = "0"
 DEFAULT_APP_ID = "0"
+DEFAULT_DEBUG_LOGGING = False
+
+# Logger of the K2 protocol library, raised to DEBUG together with our own when
+# the option above is on: most of what is worth seeing about a failing K2 hub
+# (socket bind, every frame decoded, sync timeouts) is logged in there.
+K2_PROTOCOL_LOGGER = "elro_connects_k2_protocol"
 
 # Protocol selection. AUTO is resolved to K1 or K2 by detect.py and the result
 # is stored in the config entry, so detection only runs once per hub.

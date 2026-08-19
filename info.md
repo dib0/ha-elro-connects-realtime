@@ -6,6 +6,8 @@ Real-time Home Assistant integration for ELRO Connects K1 and K2 security device
 - Direct UDP communication (so events from connected devices are handled directly)
 - Real-time event processing
 - Battery monitoring for wireless devices
+- Debug logging toggle in the integration options, which logs every UDP frame exchanged
+  with the hub (and the protocol library's own decoding) for troubleshooting
 - Support for multiple device types
 - K2 (SF50GA) hubs are driven by the
   [elro-connects-k2-protocol](https://github.com/ldebruijn/elro-connects-k2-protocol)

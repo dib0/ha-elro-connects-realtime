@@ -33,9 +33,12 @@
     "step": {
       "init": {
         "title": "ELRO Connects Real-time Options",
-        "description": "Configure advanced options for your ELRO Connects Real-time integration.",
+        "description": "Debug logging writes every UDP frame exchanged with the hub to the Home Assistant log, for this integration and for the K2 protocol library. Leave it off for normal use.",
         "data": {
-          "scan_interval": "Update interval (seconds)"
+          "debug_logging": "Enable debug logging"
+        },
+        "data_description": {
+          "debug_logging": "Takes effect immediately, no restart or reload needed. Download the log from Settings > System > Logs and attach it to a GitHub issue."
         }
       }
     }
