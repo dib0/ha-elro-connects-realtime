@@ -4,7 +4,7 @@ ELRO Connects Real-time Diagnostic Tool with K1/K2 Support
 
 Run this with Python 3.12 or newer:
 
-    python3 -m pip install elro-connects-k2-protocol==0.1.0
+    python3 -m pip install elro-connects-k2-protocol==0.1.1
     python3 elro_test_tool.py --host 192.168.0.100 --device-id ST_2342400722 --test
 
 ("python" is still Python 2 on some systems, which cannot even parse this file.)
@@ -43,7 +43,7 @@ except ImportError:  # pragma: no cover - setup help, not a runtime path
         "The K2 protocol library is missing (Python "
         f"{sys.version_info.major}.{sys.version_info.minor}, needs 3.12+).\n"
         "Install it with:\n"
-        "    python3 -m pip install --user elro-connects-k2-protocol==0.1.0\n"
+        "    python3 -m pip install --user elro-connects-k2-protocol==0.1.1\n"
         "A distro-managed Python refuses that with a PEP 668 error; there, add\n"
         "--break-system-packages, use a virtualenv, or skip installing and point\n"
         "PYTHONPATH at a checkout of the library instead:\n"

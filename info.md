@@ -2,6 +2,13 @@
 
 Real-time Home Assistant integration for ELRO Connects K1 and K2 security devices.
 
+> [!WARNING]
+> **The hub needs internet access, including to servers in China.** The integration itself
+> is local, but a hub that cannot reach the ELRO cloud stops answering local requests or
+> reports no devices — one user's "no devices in Home Assistant" was a firewall rule
+> blocking Chinese address space. Unconfirmed, but the first thing to rule out. The
+> integration raises a notification in Settings > Repairs when a hub reports nothing.
+
 ### Features
 - Direct UDP communication (so events from connected devices are handled directly)
 - Real-time event processing

@@ -90,6 +90,18 @@ Before setting up the integration, you need:
 1. **ELRO Connects Hub**: A functioning ELRO Connects hub connected to your network
 2. **Hub IP Address**: The local IP address of your hub (e.g., `192.168.1.100`)
 3. **Device ID**: The unique identifier of your hub (usually starts with `ST_`)
+4. **Unrestricted outbound access for the hub** — see the warning below
+
+> [!WARNING]
+> **The hub needs to reach the internet, including servers in China.** Although this
+> integration talks to the hub locally, the hub itself appears to go quiet when it cannot
+> reach the ELRO cloud: it stops answering local requests, or answers but reports no
+> devices. One user's "no devices in Home Assistant" turned out to be a firewall rule that
+> blocked Chinese address space — removing the rule fixed it.
+>
+> This has not been confirmed independently, so treat it as the first thing to rule out
+> rather than a certainty. If you geo-block, use a restrictive egress policy, or put the
+> hub on an IoT VLAN with no internet access, allow the hub out and reload the integration.
 
 ### Finding Your Hub Information
 
@@ -286,11 +298,41 @@ payload, and counted as `Frames not routed` in the closing statistics.
 - Check that port 1025 is not blocked by your firewall
 - Try pinging the hub IP address from your Home Assistant host
 
-#### No Devices Discovered
-- Wait a few minutes after setup for initial device discovery
-- Use the `elro_connects.sync_devices` service to force discovery
-- Check that your devices are properly paired with the hub
-- Ensure devices have sufficient battery level
+#### No devices appear in Home Assistant
+
+The integration raises a notification in **Settings → Repairs** when a hub reports no
+devices, and names which of three things it is seeing. It carries the UDP traffic tally,
+links here, and clears itself as soon as the hub reports a device. It appears about a
+minute after setup, and also while an entry is stuck retrying.
+
+| Notification | What the hub is doing | Where to look |
+| --- | --- | --- |
+| *… is not answering* | Nothing has arrived at all | The network: hub internet access, UDP 1025, container networking, the IP address |
+| *… is ignoring Home Assistant* | Frames arrive, but the hub never acknowledges the activation ping, so it drops every command | The Device ID first — it must match the hub character for character |
+| *… reports no devices* | The hub answers normally with an empty device list | Pairing, battery and range of the detectors |
+
+In order of likelihood:
+
+- **The hub cannot reach the internet.** See the warning under
+  [Prerequisites](#prerequisites): a hub that cannot reach the ELRO cloud (hosted in China)
+  stops serving its device list, and a firewall or VLAN that blocks that traffic looks
+  exactly like a broken integration. This is the reported cause of at least one case, and
+  it is the cheapest thing to rule out.
+- **The Device ID does not match.** A K2 arms its session only for a request that names it
+  exactly, and until it does it ignores commands without a word — which looks identical to
+  an empty hub. `elro-connects-k2-protocol` 0.1.1 waits for the hub's acknowledgement and
+  retries the sync when it never came, so this now shows up as *is ignoring Home
+  Assistant* instead of as silence.
+- **UDP port 1025 is taken or blocked** — see the port note above.
+- **Home Assistant cannot reach the hub directly.** In a container, host networking is
+  required; on its own bridge network the hub's replies never come back.
+- **The devices are not paired with this hub**, or are out of range or out of battery: a
+  sub-device the hub has lost is left out of the list. Confirm in the ELRO Connects app,
+  then call `elro_connects_realtime.sync_devices` to ask again.
+
+Enable [debug logging](#debug-logging) to see every frame; the traffic tally on the
+`K2 sync returned no devices` warning is the quickest split between "nothing arrives" and
+"frames arrive but say nothing".
 
 #### Devices Show as Unavailable
 - Check device battery levels
@@ -318,7 +360,8 @@ What it adds, in the order it is useful when a hub is not working:
 | `K2 --> <ip>:1025 {...}` | Every frame sent, including the activation ping and keepalives |
 | `K2 <-- <ip>:<port> {...}` | Every frame received, with the port the hub answered from |
 | `K2 <-- ... did not decode` (warning) | The hub answered with something that is not a K2 frame - the hex dump is on the same line |
-| `K2 sync returned no devices ...` (warning) | Ends with a traffic tally: how many frames went out, how many came back, and when the last one arrived |
+| `Gateway ... activated in <n> ms` | The hub acknowledged the activation ping, so it is accepting commands; a `did not acknowledge any of 3 activation pings` warning instead means it is ignoring us, and the Device ID is the first suspect |
+| `K2 sync returned no devices ...` (warning) | Ends with a traffic tally: how many frames went out, how many came back, when the last one arrived, and whether the session was ever armed |
 | `K2 frame ... CMD_CODE <n> not routed by the library` | The hub is talking, but about something the library does not decode |
 
 If devices still do not appear, the tally on the `no devices` warning is the
@@ -346,7 +389,7 @@ Use `python3` explicitly - on some systems `python` is still Python 2, which can
 these files - and note that the K2 library needs Python 3.12 or newer.
 
 ```bash
-python3 -m pip install --user elro-connects-k2-protocol==0.1.0
+python3 -m pip install --user elro-connects-k2-protocol==0.1.1
 
 # Connectivity test, protocol auto-detected
 python3 elro_test_tool.py --host 192.168.0.100 --device-id ST_2342400722 --test
@@ -381,6 +424,8 @@ own environment.
 - **Port**: 1025
 - **Network**: Hub and Home Assistant must be on the same local network
 - **Firewall**: Ensure UDP port 1025 is not blocked
+- **Hub internet access**: The hub needs to reach the ELRO cloud (servers in China) or it
+  stops reporting devices — see the warning under [Prerequisites](#prerequisites)
 
 ## Development
 

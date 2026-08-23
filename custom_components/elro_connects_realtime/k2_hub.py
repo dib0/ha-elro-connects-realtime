@@ -59,8 +59,9 @@ TRIGGERED_ALARM_STATES = frozenset(state.name for state in _TRIGGERED_STATES)
 _ALARM_MESSAGE_FIELD = "alarmMessage"
 
 # CMD_CODEs the protocol library routes itself, so anything else can be logged
-# once instead of silently dropped.
-_LIBRARY_CMD_CODES = frozenset({11, 13, 17, 19, 55, 56, 62, 66})
+# once instead of silently dropped. 0 is the NODE_ACK the library has consumed
+# as its activation acknowledgement since 0.1.1.
+_LIBRARY_CMD_CODES = frozenset({0, 11, 13, 17, 19, 55, 56, 62, 66})
 
 # How much of an undecodable datagram to hex-dump. Long enough to recognise a
 # frame (the XOR seed plus the start of the JSON), short enough not to flood the
@@ -98,6 +99,12 @@ class ElroK2Hub:
         self._frames_received = 0
         self._frames_undecodable = 0
         self._last_frame_received: datetime | None = None
+        # Result of the last activate(): True once the hub has acked an
+        # activation ping, False if it never did, None before the first attempt.
+        # An un-armed hub drops every command it is sent without answering, so
+        # this is the difference between "no devices paired" and "the hub is not
+        # listening to us" - see async_sync_devices.
+        self._session_armed: bool | None = None
         self._devices: dict[int, ElroDevice] = {}
         self._device_update_callbacks: list[Callable[[ElroDevice], None]] = []
         self._running = False
@@ -116,6 +123,27 @@ class ElroK2Hub:
     def protocol(self) -> str:
         """Return current protocol."""
         return PROTOCOL_K2
+
+    @property
+    def session_armed(self) -> bool | None:
+        """Return whether the hub acked our last activation ping.
+
+        None before the first attempt. False means the hub is ignoring us: it
+        arms its session only once it has processed a targeted IOT_KEY? from
+        this host, and until then it drops APP_SEND silently. A ``devID`` that
+        does not match the hub exactly is the usual reason.
+        """
+        return self._session_armed
+
+    @property
+    def frames_received(self) -> int:
+        """Return how many datagrams have arrived from anywhere since start.
+
+        Zero means the socket has been silent, which is what separates "the hub
+        cannot reach us" from "the hub answers but reports nothing" - the two
+        halves of the repair issue raised in issues.py.
+        """
+        return self._frames_received
 
     def add_device_update_callback(
         self, callback: Callable[[ElroDevice], None]
@@ -214,8 +242,11 @@ class ElroK2Hub:
     async def async_sync_devices(self) -> None:
         """Refresh every device (CMD_CODE 54) and their names (CMD_CODE 24)."""
         async with self._sync_lock:
-            # The hub ignores APP_SEND until the session has been re-activated.
-            await self._gateway.activate()
+            # The hub ignores APP_SEND until the session has been re-activated,
+            # and activate() reports whether it acknowledged this one. The
+            # library retries the sync itself when it did not, so a False here
+            # is diagnosis rather than something to act on.
+            self._session_armed = await self._gateway.activate()
             devices = await self._gateway.sync_devices()
 
         if not devices:
@@ -228,7 +259,7 @@ class ElroK2Hub:
                 "%s. Enable debug logging in the integration options to see "
                 "every frame",
                 self._host,
-                self._traffic_summary(),
+                self.traffic_summary(),
             )
         else:
             _LOGGER.debug(
@@ -297,7 +328,7 @@ class ElroK2Hub:
         while self._running:
             try:
                 await asyncio.sleep(K2_KEEPALIVE_SECONDS)
-                _LOGGER.debug("K2 keepalive: %s", self._traffic_summary())
+                _LOGGER.debug("K2 keepalive: %s", self.traffic_summary())
                 await self._gateway.activate()
             except asyncio.CancelledError:
                 break
@@ -372,7 +403,7 @@ class ElroK2Hub:
         except OSError as ex:
             return f"unavailable ({ex})"
 
-    def _traffic_summary(self) -> str:
+    def traffic_summary(self) -> str:
         """One-line UDP traffic tally for the warnings that need the context."""
         if self._frames_received == 0:
             return (
@@ -381,10 +412,18 @@ class ElroK2Hub:
                 f"{UDP_PORT} is reachable in both directions and not already in "
                 "use on this host"
             )
+        if self._session_armed is False:
+            session = (
+                "; the hub answers but has never acknowledged an activation "
+                f"ping, so it drops every command sent to it - check that the "
+                f"Device ID {self._device_id!r} matches the hub exactly"
+            )
+        else:
+            session = ""
         return (
             f"{self._frames_sent} frame(s) sent, {self._frames_received} received "
             f"({self._frames_undecodable} undecodable), last one at "
-            f"{self._last_frame_received}"
+            f"{self._last_frame_received}{session}"
         )
 
     def _send_and_log(self, message: str) -> None:

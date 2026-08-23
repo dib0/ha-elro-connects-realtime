@@ -33,6 +33,7 @@ from .const import (
 from .detect import async_detect_protocol
 from .device import ElroDevice
 from .hub import ElroConnectsHub
+from .issues import async_clear_hub_issue, async_report_hub_not_reporting
 from .k2_hub import ElroK2Hub
 from .models import ElroHub
 
@@ -73,6 +74,12 @@ SERVICE_GET_DEVICE_NAMES_SCHEMA = vol.Schema({})
 SERVICE_REMOVE_STALE_DEVICES_SCHEMA = vol.Schema({})
 
 SERVICES = ("test_alarm", "sync_devices", "get_device_names", "remove_stale_devices")
+
+# A hub can come back empty once - a sync that timed out, a hub still booting -
+# so the Repairs notification waits for this many consecutive empty refreshes.
+# The first refresh happens during setup, so with the K2's 60s interval a hub
+# that really is reporting nothing is flagged about a minute in.
+EMPTY_REFRESHES_BEFORE_ISSUE = 2
 
 
 def _subdevice_id_from_identifiers(device_entry: dr.DeviceEntry) -> int | None:
@@ -290,7 +297,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     # Create coordinator for device updates
-    coordinator = ElroConnectsCoordinator(hass, hub)
+    coordinator = ElroConnectsCoordinator(hass, entry, hub)
 
     # DataUpdateCoordinator only schedules its next refresh while it has at
     # least one listener, and these entities are not CoordinatorEntity
@@ -323,6 +330,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Assistant retries a not-ready entry indefinitely, and an offline hub
         # should not fill the log with tracebacks.
         _LOGGER.debug("Hub start failed for %s", entry.data[CONF_HOST], exc_info=True)
+        # A retrying entry only shows "Retrying setup" in the UI, which is the
+        # lack of feedback the Repairs notification exists to fix. Raised from
+        # here as well as from the coordinator, so a hub that never completes
+        # its handshake is explained too.
+        async_report_hub_not_reporting(hass, entry, hub)
         raise ConfigEntryNotReady(
             f"Could not connect to the {protocol} hub at {entry.data[CONF_HOST]}: {ex}"
         ) from ex
@@ -541,6 +553,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return unload_ok
 
 
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Withdraw this hub's Repairs notification when the hub is deleted.
+
+    Not done on unload: a reload unloads too, and the notification should stay up
+    across one instead of flickering off and back on a minute later.
+    """
+    async_clear_hub_issue(hass, entry)
+
+
 async def async_remove_config_entry_device(
     hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
 ) -> bool:
@@ -566,9 +587,13 @@ async def async_remove_config_entry_device(
 class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):
     """Class to manage fetching data from ELRO Connects hub."""
 
-    def __init__(self, hass: HomeAssistant, hub: ElroHub) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, hub: ElroHub) -> None:
         """Initialize."""
         self.hub = hub
+        # Named entry rather than config_entry: recent Home Assistant versions
+        # own that attribute and set it from a keyword argument to super().
+        self.entry = entry
+        self._empty_refreshes = 0
         super().__init__(
             hass,
             _LOGGER,
@@ -581,7 +606,32 @@ class ElroConnectsCoordinator(DataUpdateCoordinator[dict[int, ElroDevice]]):
         try:
             # Request device status update
             await self.hub.async_sync_devices()
-            return self.hub.devices
         except Exception as exception:
             _LOGGER.error("Error updating data: %s", exception)
             raise UpdateFailed(exception) from exception
+
+        self._review_reporting()
+        return self.hub.devices
+
+    def _review_reporting(self) -> None:
+        """Raise or withdraw the Repairs notification about an empty hub.
+
+        A sync that returns nothing is not an error - the hub simply never
+        answered - so nothing above this point notices, and every entity just
+        goes stale after ElroDevice.is_available's five-minute window.
+        """
+        if self.hub.devices:
+            self._empty_refreshes = 0
+            async_clear_hub_issue(self.hass, self.entry)
+            return
+
+        self._empty_refreshes += 1
+        if self._empty_refreshes < EMPTY_REFRESHES_BEFORE_ISSUE:
+            _LOGGER.debug(
+                "Refresh %d returned no devices; notifying after %d",
+                self._empty_refreshes,
+                EMPTY_REFRESHES_BEFORE_ISSUE,
+            )
+            return
+
+        async_report_hub_not_reporting(self.hass, self.entry, self.hub)

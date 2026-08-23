@@ -15,7 +15,7 @@ pytest-cov==6.2.1
 pytest-homeassistant-custom-component==0.13.269
 
 # K2 protocol library (also declared in manifest.json; needs Python >= 3.12)
-elro-connects-k2-protocol==0.1.0
+elro-connects-k2-protocol==0.1.1
 
 # Home Assistant core (for development and testing)
 homeassistant==2025.8.0
