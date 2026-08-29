@@ -124,6 +124,11 @@ def _create_sensors_for_device(
     if device.battery_level >= 0:
         entities.append(ElroConnectsBatterySensor(device, hub, created))
 
+    # A K1 reports the signal in the first status byte, so the same sensor
+    # applies here. It stays disabled by default, as it is on K2.
+    if device.signal_bars is not None:
+        entities.append(ElroConnectsSignalSensor(device, hub, created))
+
     return entities
 
 
@@ -229,6 +234,12 @@ class ElroConnectsBatterySensor(ElroConnectsSensor):
             return None
         if self._device.mains_powered and self._device.battery_level == 0:
             return None
+        # A hub fills the battery byte with FF for a device it has no reading
+        # for, which would surface as a 255 % battery. Anything above 100 is
+        # not a percentage, so report unknown instead of writing a nonsense
+        # value into long term statistics.
+        if self._device.battery_level > 100:
+            return None
         return self._device.battery_level
 
     @property
@@ -260,9 +271,9 @@ class ElroConnectsBatterySensor(ElroConnectsSensor):
 
 
 class ElroConnectsSignalSensor(ElroConnectsSensor):
-    """RF signal strength (1-4 bars) for a K2 device.
+    """RF signal strength in bars, as reported by either hub generation.
 
-    Reported without a device class: the K2 only exposes bars, and Home
+    Reported without a device class: the hub only exposes bars, and Home
     Assistant requires a dB/dBm unit for SensorDeviceClass.SIGNAL_STRENGTH.
     """
 

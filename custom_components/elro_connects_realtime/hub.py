@@ -466,6 +466,18 @@ class ElroConnectsHub:
 
         # Parse device status
         device_status = data.get("device_status", "")
+        # Keep the raw bytes and the signal reading, the same two fields the
+        # K2 path already fills. The status is [signal][battery][state][value],
+        # one hex byte each. A hub that has not heard from a device fills the
+        # whole field with FF, so a signal of FF means no contact rather than a
+        # strong link and is reported as unknown.
+        device.raw_status = device_status or None
+        if len(device_status) >= 2:
+            try:
+                signal = int(device_status[0:2], 16)
+                device.signal_bars = None if signal == 0xFF else signal
+            except ValueError:
+                device.signal_bars = None
         if len(device_status) >= 4:
             # Battery level
             try:

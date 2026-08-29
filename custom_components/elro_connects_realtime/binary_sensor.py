@@ -182,6 +182,16 @@ class ElroConnectsBinarySensor(BinarySensorEntity):
         if self._device.last_seen:
             attrs[ATTR_LAST_SEEN] = self._device.last_seen.isoformat()
 
+        # The raw status and the signal let a template read what this platform
+        # does not model: the state byte, which distinguishes a fault or a low
+        # battery from no contact at all, and how well the hub hears the device.
+        if self._device.raw_status:
+            attrs["raw_status"] = self._device.raw_status
+            if len(self._device.raw_status) >= 6:
+                attrs["state_code"] = self._device.raw_status[4:6]
+        if self._device.signal_bars is not None:
+            attrs["signal_bars"] = self._device.signal_bars
+
         return attrs
 
     async def async_added_to_hass(self) -> None:
