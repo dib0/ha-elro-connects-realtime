@@ -11,6 +11,8 @@ Real-time Home Assistant integration for ELRO Connects K1 and K2 security device
 
 ### Features
 - Direct UDP communication (so events from connected devices are handled directly)
+- K2 hubs are discovered on the network, so their IP address and Device ID are filled in
+  for you (K1 hubs do not answer the discovery broadcast and are set up by hand)
 - Real-time event processing
 - Battery monitoring for wireless devices
 - Debug logging toggle in the integration options, which logs every UDP frame exchanged

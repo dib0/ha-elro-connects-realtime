@@ -22,6 +22,7 @@ plain-text UDP implementation. If you only have K2 hardware, also have a look at
 - **🏠 Multiple Device Types**: Supports various ELRO Connects devices
 - **🛠️ Service Calls**: Test alarms and sync devices via Home Assistant services
 - **🔄 Auto Discovery**: Automatic device discovery and naming
+- **📡 Hub Discovery (K2)**: K2 hubs are found on the network, so their IP address and Device ID do not have to be looked up by hand
 - **🐞 Debug Logging Toggle**: Log every UDP frame from the integration options, no YAML needed
 
 ## Supported Devices
@@ -92,6 +93,9 @@ Before setting up the integration, you need:
 3. **Device ID**: The unique identifier of your hub (usually starts with `ST_`)
 4. **Unrestricted outbound access for the hub** — see the warning below
 
+Items 2 and 3 are filled in for you when the hub is a K2 and the network scan finds it;
+see [Automatic hub discovery (K2)](#automatic-hub-discovery-k2).
+
 > [!WARNING]
 > **The hub needs to reach the internet, including servers in China.** Although this
 > integration talks to the hub locally, the hub itself appears to go quiet when it cannot
@@ -102,6 +106,33 @@ Before setting up the integration, you need:
 > This has not been confirmed independently, so treat it as the first thing to rule out
 > rather than a certainty. If you geo-block, use a restrictive egress policy, or put the
 > hub on an IoT VLAN with no internet access, allow the hub out and reload the integration.
+
+### Automatic hub discovery (K2)
+
+When you add the integration it first broadcasts the K2 discovery request
+(`IOT_KEY?` with `devID: NULL`) on UDP port 1025 and lists every hub that answers, with
+its Device ID and address. Pick one and it is configured straight away: a hub that answers
+that broadcast is by definition a K2, so there is nothing left to detect and nothing left
+to type.
+
+The scan takes about four seconds and is sent to `255.255.255.255` as well as to the
+broadcast address of every interface Home Assistant knows about, so it also reaches a hub
+on the far side of a second NIC or a VPN. It cannot cross a router, so the hub has to be on
+the same subnet as Home Assistant (or on a network that forwards the broadcast to it).
+
+The scan is skipped, and the form for entering the details by hand is shown instead, when:
+
+- **the hub is a K1.** A K1 does not speak the XOR-framed protocol, and its own plain-text
+  `IOT_KEY?` has to name the hub — which is the very thing discovery would be finding. K1
+  hubs are always set up by hand.
+- **a hub is already configured.** A K2 session owns UDP port 1025; a scan running next to
+  it would be handed some of the datagrams meant for it, an alarm push among them. Adding a
+  second hub is therefore done by hand.
+- **something else holds UDP port 1025** — a second copy of this integration, or
+  `elro_test_tool.py` on the same host.
+
+Nothing answering is not an error either: the manual form appears and the sections below
+explain where to find the two values it asks for.
 
 ### Finding Your Hub Information
 
@@ -123,7 +154,11 @@ Before setting up the integration, you need:
 1. Go to **Configuration** → **Integrations**
 2. Click the **"+"** button
 3. Search for **"ELRO Connects Real-time"**
-4. Enter your hub information:
+4. If your hub is a K2 and the scan found it, pick it from the list and you are done — the
+   remaining fields are only asked for when you choose *Enter the hub details manually*, or
+   when the scan came up empty (see
+   [Automatic hub discovery (K2)](#automatic-hub-discovery-k2)).
+5. Enter your hub information:
    - **IP Address**: Your hub's local IP address
    - **Device ID**: Your hub's device identifier (e.g., `ST_ab4f224febfd` (This is case sensitive. For the K2 it has to be uppercase: `ST_AB4F224FEBFD`))
    - **Hub protocol**: Leave on `Auto-detect` unless detection picks the wrong one. The
@@ -132,7 +167,7 @@ Before setting up the integration, you need:
      explicitly to skip it.
    - **Control Key**: Leave as default (`0`) unless specified otherwise (K1 only)
    - **App ID**: Leave as default (`0`) unless specified otherwise (K1 only)
-5. Click **Submit**
+6. Click **Submit**
 
 The integration will automatically discover and configure your devices.
 
